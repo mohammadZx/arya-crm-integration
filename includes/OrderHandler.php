@@ -32,8 +32,10 @@ class OrderHandler {
      * Initialize hooks
      */
     private function init_hooks() {
-        // Note: These hooks will be called from theme's Orders class
-        // We provide the functionality here
+        add_action('woocommerce_payment_complete', [$this, 'insert_on_portal']);
+        add_action('woocommerce_checkout_order_processed', [$this, 'insert_order_request_on_portal'], 10, 1);
+        add_action('woocommerce_thankyou', [$this, 'complete_info'], 4);
+        add_action('woocommerce_checkout_create_order_line_item', [$this, 'installment_order'], 10, 4);
     }
     
     /**

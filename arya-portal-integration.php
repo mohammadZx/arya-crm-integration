@@ -104,6 +104,8 @@ final class Arya_Portal_Integration {
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/OrderHandler.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/RedirectHelper.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Public_REST_API.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Admin.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Installment.php';
     }
     
     /**
@@ -112,6 +114,12 @@ final class Arya_Portal_Integration {
     public function load_plugin() {
         // Initialize settings
         Arya\Portal\Settings::instance();
+
+        // Initialize Admin
+        Arya\Portal\Admin::instance();
+
+        // Initialize Installment
+        Arya\Portal\Installment::instance();
         
         // Initialize REST API (Portal endpoints)
         Arya\Portal\REST_API::instance();

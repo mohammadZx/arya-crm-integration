@@ -39,8 +39,7 @@ class Public_REST_API {
         add_filter('post_search_columns', [$this, 'limit_search_columns']);
         add_filter('rest_prepare_comment', [$this, 'add_post_title_to_comment'], 10, 3);
         add_filter('rest_comment_query', [$this, 'include_all_comment_types'], 10, 2);
-        add_filter('posts_search', [$this, 'custom_search_for_rest_api'], 10, 2);
-        add_filter('wp_speculation_rules_href_exclude_paths', [$this, 'exclude_paths_from_speculation']);
+        add_filter('rest_product_collection_params', [$this, 'add_rand_orderby_param']);
     }
     
     /**
@@ -198,56 +197,13 @@ class Public_REST_API {
         
         return $args;
     }
-    
+
     /**
-     * Custom search for REST API with normalization
+     * Add rand to orderby param for product collection
      */
-    public function custom_search_for_rest_api($search, $query) {
-        global $wpdb;
-
-        // Only for REST API and search endpoint
-        if (
-            !defined('REST_REQUEST') || !REST_REQUEST ||
-            !isset($query->query_vars['s']) ||
-            !isset($_SERVER['REQUEST_URI']) ||
-            strpos($_SERVER['REQUEST_URI'], '/wp-json/wp/v2/search') === false
-        ) {
-            return $search;
-        }
-
-        $original = esc_sql($query->query_vars['s']);
-        $variants = explode(' ', $original);
-
-        // Custom search query
-        $search = " AND ( 
-            EXISTS (
-                SELECT 1 FROM {$wpdb->postmeta}
-                WHERE {$wpdb->postmeta}.post_id = {$wpdb->posts}.ID AND 
-                {$wpdb->postmeta}.meta_key IN ('_yoast_wpseo_title') AND 
-        ";
-        
-        $like_parts = [];
-        $like_title = [];
-
-        foreach ($variants as $term) {
-            $like = '%' . $wpdb->esc_like($term) . '%';
-            $like_parts[] = $wpdb->prepare("{$wpdb->postmeta}.meta_value LIKE %s", $like);
-            $like_title[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", $like);
-        }
-        
-        $search .= implode(' AND ', $like_parts);
-        $search .= ') OR (' . implode(' AND ', $like_title) . ') )';
-        
-        return $search;
-    }
-    
-    /**
-     * Exclude paths from speculation rules
-     */
-    public function exclude_paths_from_speculation($paths) {
-        $paths[] = '/my-account';
-        $paths[] = '/my-account/';
-        return $paths;
+    public function add_rand_orderby_param($params) {
+        $params['orderby']['enum'][] = 'rand';
+        return $params;
     }
 }
 
