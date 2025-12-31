@@ -210,7 +210,7 @@ class OrderHandler {
         }
         
         // This function should be available in theme
-        if (function_exists('myAccount')) {
+        if (function_exists('myAccount') && is_user_logged_in()) {
             $accountinfo = myAccount('user-info', true);
             echo '<script>window.location = "' . esc_js($accountinfo) . '"</script>';
         }
