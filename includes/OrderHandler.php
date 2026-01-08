@@ -193,7 +193,7 @@ class OrderHandler {
     public function complete_info($order_id) {
         $order = wc_get_order($order_id);
         
-        if ($order->get_payment_method() != 'WC_ZPal' || !$order->has_status('completed')) {
+        if (($order->get_payment_method() != 'WC_ZPal' && $order->get_payment_method() != 'WC_Zibal') || !$order->has_status('completed')) {
             return;
         }
         
