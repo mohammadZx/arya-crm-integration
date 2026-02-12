@@ -152,7 +152,7 @@ class PersonData {
     public function setPersonService($data) {
         $response = wp_remote_post($this->portal_path . 'person/' . $this->phone . '/services', [
             'headers' => $this->get_headers(),
-            'body' => json_encode([
+            'body' => ([
                 'service_id' => $data['service_id'],
                 'fee_index' => $data['fee_index'],
             ]),
@@ -289,7 +289,7 @@ class PersonData {
      */
     public function setPaymentRemote($regid, $price, $orderId, $extra_data) {
         $response = wp_remote_post("{$this->portal_path}remote-pay-payment", [
-            'body' => json_encode([
+            'body' => ([
                 'register_id' => $regid,
                 'price' => $price,
                 'order_id' => $orderId,
@@ -409,7 +409,7 @@ class PersonData {
      */
     public function saveUserExam($data) {
         $response = wp_remote_post("{$this->portal_path}user-exam", [
-            'body' => json_encode([
+            'body' => ([
                 'user_id' => $data['user_id']->id,
                 'report' => $data['report'],
                 'insideType' => 'insert'
@@ -436,7 +436,7 @@ class PersonData {
      */
     public function setExamPaymentRemote($examId, $price, $orderId) {
         $response = wp_remote_post("{$this->portal_path}remote-pay-exam", [
-            'body' => json_encode([
+            'body' => ([
                 'user_id' => $this->phone,
                 'exam_id' => $examId,
                 'price' => $price,
@@ -476,7 +476,7 @@ class PersonData {
     public function get_survey_question($data) {
         $response = wp_remote_post("{$this->portal_path}survey/get-questions", [
             'headers' => $this->get_headers(),
-            'body' => json_encode([
+            'body' => ([
                 'phone' => $data['phone'],
                 'course_code' => $data['course_code'],
             ])
@@ -491,7 +491,7 @@ class PersonData {
     public function send_survey($data) {
         $response = wp_remote_post("{$this->portal_path}survey", [
             'headers' => $this->get_headers(),
-            'body' => json_encode($data)
+            'body' => ($data)
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));
@@ -503,7 +503,7 @@ class PersonData {
     public function class_course_videos($data) {
         $response = wp_remote_post("{$this->portal_path}class-course/get-videos", [
             'headers' => $this->get_headers(),
-            'body' => json_encode($data)
+            'body' => ($data)
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));
@@ -515,7 +515,7 @@ class PersonData {
     public function send_complaint($phone, $course_code, $content, $for) {
         $response = wp_remote_post("{$this->portal_path}complaint", [
             'headers' => $this->get_headers(),
-            'body' => json_encode([
+            'body' => ([
                 'phone' => $phone,
                 'course_code' => $course_code,
                 'content' => $content,
@@ -532,7 +532,7 @@ class PersonData {
     public function forceRegister($registerData) {
         $response = wp_remote_post("{$this->portal_path}remote-force-register", [
             'headers' => $this->get_headers(),
-            'body' => json_encode($registerData)
+            'body' => ($registerData)
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));
@@ -544,10 +544,27 @@ class PersonData {
     public function forceRequest($registerData) {
         $response = wp_remote_post("{$this->portal_path}remote-force-request", [
             'headers' => $this->get_headers(),
-            'body' => json_encode($registerData)
+            'body' => ($registerData)
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));
+    }
+    
+    /**
+     * Get person dashboard alerts
+     * API: GET person/{phone|id}/get-alert
+     * Response: { data: { online_class, surveys, debt, info_complete } }
+     */
+    public function getPersonAlert($phoneOrId = null) {
+        $id = $phoneOrId ?: $this->phone;
+        $response = wp_remote_get($this->portal_path . 'person/' . $id . '/get-alert', [
+            'headers' => $this->get_headers(),
+        ]);
+        $body = wp_remote_retrieve_body($response);
+        if (empty($body) || wp_remote_retrieve_response_code($response) !== 200) {
+            return null;
+        }
+        return json_decode($body);
     }
     
     /**
