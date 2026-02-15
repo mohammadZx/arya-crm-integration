@@ -34,6 +34,13 @@ if (!in_array('woocommerce/woocommerce.php', apply_filters('active_plugins', get
     return;
 }
 
+// Declare HPOS (High-Performance Order Storage) compatibility
+add_action('before_woocommerce_init', function () {
+    if (class_exists(\Automattic\WooCommerce\Utilities\FeaturesUtil::class)) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility('custom_order_tables', __FILE__, true);
+    }
+});
+
 // Autoloader
 spl_autoload_register(function ($class) {
     $prefix = 'Arya\\Portal\\';
