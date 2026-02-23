@@ -326,10 +326,19 @@ class PersonData {
     /**
      * Get exams
      */
-    public function get_exams($userId = null) {
+    public function get_exams($userId = null, $categories = null) {
         $url = "{$this->portal_path}exam";
+        $params = [];
+        
         if ($userId) {
-            $url .= "?user_id=" . $userId;
+            $params['user_id'] = $userId;
+        }
+        if ($categories) {
+            $params['categories'] = $categories;
+        }
+        
+        if ($params) {
+            $url .= '?' . http_build_query($params);
         }
         
         $response = wp_remote_get($url, [

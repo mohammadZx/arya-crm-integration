@@ -72,6 +72,12 @@ class Settings {
             'default' => 999
         ]);
         
+        register_setting('arya_portal_settings', 'arya_portal_exam_categories', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_text_field',
+            'default' => ''
+        ]);
+        
         // Settings sections
         add_settings_section(
             'arya_portal_main_section',
@@ -109,6 +115,14 @@ class Settings {
             'arya_portal_private_class_code',
             'کد کلاس خصوصی',
             [$this, 'render_private_class_code_field'],
+            'arya-portal-settings',
+            'arya_portal_main_section'
+        );
+        
+        add_settings_field(
+            'arya_portal_exam_categories',
+            'دسته‌بندی آزمون‌ها',
+            [$this, 'render_exam_categories_field'],
             'arya-portal-settings',
             'arya_portal_main_section'
         );
@@ -155,6 +169,15 @@ class Settings {
         $value = $this->get_private_class_code();
         echo '<input type="number" name="arya_portal_private_class_code" value="' . esc_attr($value) . '" class="small-text">';
         echo '<p class="description">کد دوره کلاس خصوصی در پورتال</p>';
+    }
+    
+    /**
+     * Render exam categories field
+     */
+    public function render_exam_categories_field() {
+        $value = $this->get_exam_categories();
+        echo '<input type="text" name="arya_portal_exam_categories" value="' . esc_attr($value) . '" class="regular-text" placeholder="1,2,3" dir="ltr">';
+        echo '<p class="description">شناسه دسته‌بندی آزمون‌ها در پورتال (جدا شده با کاما)</p>';
     }
     
     /**
@@ -210,6 +233,13 @@ class Settings {
      */
     public function get_private_class_code() {
         return (int) get_option('arya_portal_private_class_code', 999);
+    }
+    
+    /**
+     * Get exam categories
+     */
+    public function get_exam_categories() {
+        return get_option('arya_portal_exam_categories', '');
     }
 }
 
