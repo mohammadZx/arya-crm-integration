@@ -113,6 +113,11 @@ class OrderHandler {
         $sendData['is_online'] = $is_online;
         $sendData['gate_way'] = $order->get_payment_method();
 
+        $order_notes = wc_get_order_notes(['order_id' => $order_id, 'limit' => 1]);
+        if (!empty($order_notes)) {
+            $sendData['comments'] = $order_notes[0]->content;
+        }
+
         // Check for installment payment
         foreach ($order->get_items() as $item_id => $item) {
             $pay_as_installment = $item->get_meta('pay_as_installment', true);
