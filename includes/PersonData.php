@@ -587,5 +587,292 @@ class PersonData {
 
         return json_decode(wp_remote_retrieve_body($response));
     }
+
+    /* ===========================================================
+     |  Cooperation Request (درخواست همکاری)
+     |  getCooperationOptions(): از get-utilities با Bearer
+     |  submitCooperationRequest(): POST cooperation-request با Bearer (همان توکن API پورتال)
+     ===========================================================*/
+
+    /**
+     * @param array|null $body
+     */
+    private function cooperation_api_success($http_code, $body) {
+        if ($http_code < 200 || $http_code >= 300) {
+            return false;
+        }
+        if (!is_array($body)) {
+            return false;
+        }
+        if (!empty($body['alert']) && ($body['alert']['type'] ?? '') === 'error') {
+            return false;
+        }
+        return isset($body['data']);
+    }
+
+    /**
+     * @param array|null $body
+     */
+    private function cooperation_api_error_message($body) {
+        if (!is_array($body)) {
+            return 'پاسخ نامعتبر از سرور';
+        }
+        if (!empty($body['alert']['message'])) {
+            $m = $body['alert']['message'];
+            return is_array($m) ? implode(' ', array_map('strval', $m)) : (string) $m;
+        }
+        if (!empty($body['message'])) {
+            return (string) $body['message'];
+        }
+        return 'خطا در ثبت درخواست';
+    }
+
+    /**
+     * Get cooperation form default options (request_types, work_types, fields).
+     * مهارت‌ها دیگر از get-utilities بارگذاری نمی‌شوند؛ از جستجوی Option با option_key همکاری استفاده کنید.
+     *
+     * @param bool $force Bypass cache.
+     * @return array
+     */
+    public function getCooperationOptions($force = false) {
+        $cache_key = 'arya_portal_cooperation_options_v2';
+
+        if (!$force) {
+            $cached = get_transient($cache_key);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        $defaults = [
+            'request_types' => ['کارآموز عادی', 'کارآموزی با حقوق', 'استخدام'],
+            'work_types'    => ['ثابت', 'شیفتی', 'دورکار', 'پروژه‌ای'],
+            'fields'        => ['فنی', 'حسابداری', 'استاد', 'بازاریابی', 'پشتیبانی'],
+            'skills'        => [],
+        ];
+
+        if (empty($this->api_token) || empty($this->portal_url)) {
+            return $defaults;
+        }
+
+        $response = wp_remote_get($this->portal_path . 'get-utilities', [
+            'timeout' => 15,
+            'headers' => $this->get_headers(),
+        ]);
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return $defaults;
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        $data = isset($body['data']) && is_array($body['data']) ? $body['data'] : [];
+
+        $extract = function ($arr) {
+            if (!is_array($arr)) return [];
+            $out = [];
+            foreach ($arr as $item) {
+                if (is_array($item)) {
+                    $val = $item['option_value'] ?? $item['label'] ?? $item['value'] ?? null;
+                } else {
+                    $val = $item;
+                }
+                if ($val !== null && $val !== '') $out[] = (string) $val;
+            }
+            return array_values(array_unique($out));
+        };
+
+        $options = [
+            'request_types' => $extract($data['cooperation_request_types'] ?? []) ?: $defaults['request_types'],
+            'work_types'    => $extract($data['cooperation_work_types']    ?? []) ?: $defaults['work_types'],
+            'fields'        => $extract($data['cooperation_fields']        ?? []) ?: $defaults['fields'],
+            'skills'        => [],
+        ];
+
+        set_transient($cache_key, $options, HOUR_IN_SECONDS);
+        return $options;
+    }
+
+    /**
+     * جستجوی مهارت همکاری در CRM از مسیر عمومی search/Option/option_value با filter_option_key.
+     *
+     * @return array{ success: bool, skills?: string[], message?: string }
+     */
+    public function searchCooperationSkills($query) {
+        $query = trim((string) $query);
+        if ($query === '' || mb_strlen($query) < 2) {
+            return ['success' => true, 'skills' => []];
+        }
+        if (empty($this->api_token) || empty($this->portal_url)) {
+            return ['success' => false, 'skills' => [], 'message' => 'پورتال یا توکن تنظیم نشده است.'];
+        }
+
+        /*
+         * مسیر اختصاصی search/cooperation-skills در برخی نسخه‌های CRM نیست.
+         * از همان جستجوی عمومی Option با filter_option_key استفاده می‌کنیم (همان منطق Vue/dynamicSearch).
+         */
+        $path_search = rawurlencode($query);
+        $url = $this->portal_path . 'search/Option/option_value/' . $path_search . '?' . http_build_query([
+            'filter_no_label'   => '1',
+            'filter_option_key' => 'cooperation_skill',
+        ]);
+
+        $response = wp_remote_get($url, [
+            'timeout' => 15,
+            'headers' => $this->get_headers(),
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'skills' => [], 'message' => $response->get_error_message()];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $raw  = wp_remote_retrieve_body($response);
+        $decoded = json_decode($raw, true);
+
+        if ($code < 200 || $code >= 300 || !is_array($decoded)) {
+            return ['success' => false, 'skills' => [], 'message' => 'خطا در جستجوی مهارت‌ها', 'data' => $raw];
+        }
+
+        $skills = [];
+        foreach ($decoded as $row) {
+            if (is_array($row) && !empty($row['option_value'])) {
+                $skills[] = (string) $row['option_value'];
+            }
+        }
+        $skills = array_values(array_unique($skills));
+
+        return ['success' => true, 'skills' => $skills];
+    }
+
+    /**
+     * Clear cached cooperation options.
+     */
+    public function flushCooperationOptions() {
+        delete_transient('arya_portal_cooperation_options');
+        delete_transient('arya_portal_cooperation_options_v2');
+    }
+
+    /**
+     * ثبت درخواست همکاری در CRM.
+     * مسیر: POST /api/v1/cooperation-request با همان احراز هویت Bearer سایر APIها (توکن پورتال).
+     * کاربر مرتبط با API باید در CRM مجوز add_cooperation داشته باشد.
+     *
+     * @param array      $data شامل phone، name، insideType=insert، فیلدهای فرم و …
+     * @param array|null $file آرایهٔ $_FILES رزومه در صورت وجود
+     * @return array { success, status, message, body }
+     */
+    public function submitCooperationRequest($data, $file = null) {
+        if (empty($this->portal_url)) {
+            return [
+                'success' => false,
+                'status'  => 0,
+                'message' => 'آدرس پورتال تنظیم نشده است.',
+                'body'    => null,
+            ];
+        }
+        if (empty($this->api_token)) {
+            return [
+                'success' => false,
+                'status'  => 0,
+                'message' => 'توکن API پورتال در تنظیمات ووکامرس → پورتال آریا وارد نشده است.',
+                'body'    => null,
+            ];
+        }
+
+        $url = $this->portal_path . 'cooperation-request';
+
+        if (empty($data['insideType'])) {
+            $data['insideType'] = 'insert';
+        }
+        if (empty($data['source'])) {
+            $data['source'] = 'wordpress_' . parse_url(home_url(), PHP_URL_HOST);
+        }
+
+        if (isset($data['skills']) && is_string($data['skills'])) {
+            $skills = preg_split('/[,،\n]+/u', $data['skills']);
+            $data['skills'] = array_values(array_filter(array_map('trim', $skills)));
+        }
+
+        $auth_headers_curl = [
+            'Accept: application/json',
+            'Authorization: Bearer ' . $this->api_token,
+        ];
+
+        if (is_array($file) && !empty($file['tmp_name']) && file_exists($file['tmp_name'])) {
+            $postfields = [];
+            foreach ($data as $key => $value) {
+                if ($value === null || $value === '' || $key === 'resume') {
+                    continue;
+                }
+                /* آرایهٔ skills را برای multipart/cURL به صورت skills[0], skills[1], … می‌فرستیم؛
+                   در غیر این صورت libcurl اغلب فقط یکی را می‌فرستد یا Laravel آرایه را درست نمی‌گیرد. */
+                if ($key === 'skills' && is_array($value)) {
+                    $n = 0;
+                    foreach (array_values($value) as $skill) {
+                        $skill = is_string($skill) ? trim($skill) : '';
+                        if ($skill === '') {
+                            continue;
+                        }
+                        $postfields['skills[' . $n++ . ']'] = $skill;
+                    }
+                    continue;
+                }
+                $postfields[$key] = $value;
+            }
+            $postfields['resume'] = new \CURLFile(
+                $file['tmp_name'],
+                !empty($file['type']) ? $file['type'] : 'application/octet-stream',
+                !empty($file['name']) ? $file['name'] : 'resume.bin'
+            );
+
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $auth_headers_curl);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+
+            $raw = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err  = curl_error($ch);
+            curl_close($ch);
+
+            if ($raw === false) {
+                return ['success' => false, 'status' => 0, 'message' => $err ?: 'cURL error', 'body' => null];
+            }
+
+            $decoded = json_decode($raw, true);
+            $ok = $this->cooperation_api_success($code, $decoded);
+            return [
+                'success' => $ok,
+                'status'  => $code,
+                'message' => $ok ? '' : $this->cooperation_api_error_message($decoded),
+                'body'    => $decoded,
+            ];
+        }
+
+        $headers = array_merge($this->get_headers(), ['Content-Type' => 'application/json']);
+
+        $response = wp_remote_post($url, [
+            'timeout' => 25,
+            'headers' => $headers,
+            'body'    => wp_json_encode($data),
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['success' => false, 'status' => 0, 'message' => $response->get_error_message(), 'body' => null];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $decoded = json_decode(wp_remote_retrieve_body($response), true);
+        $ok = $this->cooperation_api_success($code, $decoded);
+
+        return [
+            'success' => $ok,
+            'status'  => $code,
+            'message' => $ok ? '' : $this->cooperation_api_error_message($decoded),
+            'body'    => $decoded,
+        ];
+    }
 }
 
