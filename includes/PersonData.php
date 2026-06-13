@@ -322,6 +322,57 @@ class PersonData {
         
         return json_decode(wp_remote_retrieve_body($response));
     }
+
+    /**
+     * Aggregate everything the profile form needs in a single request.
+     *
+     * Calls the CRM `person/{id}/data/form` endpoint only. No local/bundled
+     * schema fallback — if the web service is unavailable, returns success=false.
+     *
+     * @return array{ success: bool, error?: string, person?: mixed, personData?: mixed, dependency?: mixed, schema?: array, translations?: array }
+     */
+    public function getPersonDataForm($phone = null) {
+        $phone = $phone ?: $this->phone;
+        $this->phone = $phone;
+
+        $error_message = 'خطایی پیش آمده. در حال بررسی هستیم. لطفا چند ساعت دیگر مجدد بازدید نمایید.';
+
+        if (empty($this->portal_url) || empty($this->api_token) || empty($phone)) {
+            return ['success' => false, 'error' => $error_message];
+        }
+
+        $response = wp_remote_get($this->portal_path . 'person/' . $phone . '/data/form', [
+            'timeout' => 20,
+            'headers' => $this->get_headers(),
+        ]);
+
+        if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
+            return ['success' => false, 'error' => $error_message];
+        }
+
+        $bundle = json_decode(wp_remote_retrieve_body($response));
+        if (!is_object($bundle)
+            || empty($bundle->person)
+            || empty($bundle->personData)
+            || empty($bundle->dependency)
+            || empty($bundle->schema)) {
+            return ['success' => false, 'error' => $error_message];
+        }
+
+        $schema = json_decode(json_encode($bundle->schema), true);
+        if (!is_array($schema) || empty($schema['fields'])) {
+            return ['success' => false, 'error' => $error_message];
+        }
+
+        return [
+            'success'      => true,
+            'person'       => $bundle->person,
+            'personData'   => $bundle->personData,
+            'dependency'   => $bundle->dependency,
+            'schema'       => $schema,
+            'translations' => json_decode(json_encode(isset($bundle->translations) ? $bundle->translations : new \stdClass()), true) ?: [],
+        ];
+    }
     
     /**
      * Get exams
