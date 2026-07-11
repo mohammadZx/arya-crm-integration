@@ -130,7 +130,8 @@ class PersonData {
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: multipart/form-data',
-            'Authorization: Bearer ' . $this->api_token
+            'Authorization: Bearer ' . $this->api_token,
+            'from_site: 1',
         ]);
 
         $response = curl_exec($ch);
@@ -371,6 +372,7 @@ class PersonData {
             'dependency'   => $bundle->dependency,
             'schema'       => $schema,
             'translations' => json_decode(json_encode(isset($bundle->translations) ? $bundle->translations : new \stdClass()), true) ?: [],
+            'fieldReviews' => json_decode(json_encode(isset($bundle->fieldReviews) ? $bundle->fieldReviews : new \stdClass()), true) ?: [],
         ];
     }
     
