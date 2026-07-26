@@ -35,6 +35,7 @@ class PersonData {
         return [
             'Authorization' => 'Bearer ' . $this->api_token,
             'Accept' => 'application/json',
+            'from_site' => 1,
         ];
     }
     
