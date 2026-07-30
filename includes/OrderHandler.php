@@ -168,15 +168,16 @@ class OrderHandler {
                 continue;
             }
             
-            // This function should be available in theme
+            $code = trim($code);
+
+            // Resolve marketing user + per-code commission from arya-account Marketing
             if (function_exists('getUserByMarketingCode')) {
-                $marketing_user = getUserByMarketingCode(trim($code));
+                $marketing_user = getUserByMarketingCode($code);
                 
-                if ($marketing_user && class_exists('\App\Woocommerce\User\Marketing')) {
-                    $marketing = new \App\Woocommerce\User\Marketing();
-                    $getLevel = $marketing->get_user_level($marketing_user->ID);
-                    $level = $marketing->adminOption['rules'][$getLevel - 1];
-                    $amount = $level['commission'];
+                if ($marketing_user && class_exists('\Arya\Account\User\Marketing')) {
+                    $marketing = new \Arya\Account\User\Marketing();
+                    $rules = $marketing->getCodeRules($marketing_user->ID, $code);
+                    $amount = isset($rules['commission']) ? floatval($rules['commission']) : 0;
 
                     $coupons[$code]['name'] = $code;
                     $coupons[$code]['user_phone'] = $marketing_user->user_login;

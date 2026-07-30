@@ -616,7 +616,7 @@ class PersonData {
     /**
      * Get person dashboard alerts
      * API: GET person/{phone|id}/get-alert
-     * Response: { data: { online_class, surveys, debt, info_complete } }
+     * Response: { data: { online_class, surveys, exercises, debt, info_complete } }
      */
     public function getPersonAlert($phoneOrId = null) {
         $id = $phoneOrId ?: $this->phone;
