@@ -32,11 +32,13 @@ class PersonData {
      * Get request headers
      */
     private function get_headers() {
-        return [
+        $headers = [
             'Authorization' => 'Bearer ' . $this->api_token,
             'Accept' => 'application/json',
             'from_site' => 1,
         ];
+
+        return $headers;
     }
     
     /**
@@ -78,6 +80,44 @@ class PersonData {
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
+     * Get CRM discounts catalog for the logged-in trainee profile.
+     */
+    public function getPersonDiscounts() {
+        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/discounts', [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
+     * فهرست پورسانت‌های معرف در CRM برای صفحه مارکتینگ سایت.
+     */
+    public function getPersonBonuses() {
+        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/bonuses', [
+            'headers' => $this->get_headers(),
+            'timeout' => 30,
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
+     * @return array{0: int, 1: mixed}
+     */
+    public function claimPersonBonus($bonusId) {
+        $response = wp_remote_post($this->portal_path . 'person/' . $this->phone . '/bonuses/' . intval($bonusId) . '/claim-wallet', [
+            'headers' => $this->get_headers(),
+            'timeout' => 45,
+        ]);
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response));
+
+        return [$code, $body];
     }
     
     /**

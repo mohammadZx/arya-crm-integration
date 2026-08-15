@@ -139,7 +139,7 @@ class Settings {
      * Render URL field
      */
     public function render_url_field() {
-        $value = $this->get_portal_url();
+        $value = get_option('arya_portal_url', 'https://portal.aryatehran.com');
         echo '<input type="url" name="arya_portal_url" value="' . esc_attr($value) . '" class="regular-text" placeholder="https://portal.aryatehran.com">';
         echo '<p class="description">آدرس کامل پورتال آریا تهران (بدون /api/v1)</p>';
     }
@@ -148,7 +148,7 @@ class Settings {
      * Render token field
      */
     public function render_token_field() {
-        $value = $this->get_api_token();
+        $value = get_option('arya_portal_api_token', '');
         echo '<input type="password" name="arya_portal_api_token" value="' . esc_attr($value) . '" class="regular-text" placeholder="توکن API">';
         echo '<p class="description">توکن دسترسی API پورتال</p>';
     }
