@@ -98,6 +98,13 @@ class REST_API {
             'permission_callback' => [$this, 'check_access_from_portal']
         ]);
 
+        // Catalog crawl endpoint (paginated, used by CRM bulk import)
+        register_rest_route('portal', '/products', [
+            'methods' => 'GET',
+            'callback' => [$this, 'list_products'],
+            'permission_callback' => [$this, 'check_access_from_portal']
+        ]);
+
         // Sync product endpoint
         register_rest_route('portal', '/sync-product', [
             'methods' => 'POST',
@@ -156,6 +163,106 @@ class REST_API {
         return rest_ensure_response($results);
     }
     
+    /**
+     * Paginated catalog listing for the CRM bulk import.
+     *
+     * /portal/search is search-driven and capped at 50 rows, so it can never
+     * walk a whole shop. Here we page over parent products and expand each
+     * variable product into its variations, because the CRM stores every
+     * variation as its own product row.
+     */
+    public function list_products($request) {
+        $page = max(1, (int) $request->get_param('page'));
+        $per_page = (int) $request->get_param('per_page');
+        $per_page = $per_page > 0 ? min($per_page, 100) : 25;
+        $with_variations = $request->get_param('variations');
+        $with_variations = $with_variations === null ? true : rest_sanitize_boolean($with_variations);
+
+        $query = new \WP_Query([
+            'post_type' => 'product',
+            'post_status' => 'publish',
+            'posts_per_page' => $per_page,
+            'paged' => $page,
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'ignore_sticky_posts' => true,
+            'no_found_rows' => false,
+        ]);
+
+        $items = [];
+
+        foreach ($query->posts as $product_post) {
+            $product = wc_get_product($product_post->ID);
+            if (!$product) {
+                continue;
+            }
+
+            $children = ($with_variations && $product->is_type('variable'))
+                ? $product->get_children()
+                : [];
+
+            if (empty($children)) {
+                $items[] = $this->crawl_item($product, null);
+                continue;
+            }
+
+            // یک محصول متغیر در CRM چند کالای مستقل می‌شود، پس والد ردیف ندارد.
+            foreach ($children as $child_id) {
+                $variation = wc_get_product($child_id);
+                if (!$variation) {
+                    continue;
+                }
+                $items[] = $this->crawl_item($variation, $product);
+            }
+        }
+
+        return rest_ensure_response([
+            'status' => true,
+            'page' => $page,
+            'per_page' => $per_page,
+            'total' => (int) $query->found_posts,
+            'total_pages' => (int) $query->max_num_pages,
+            'items' => $items,
+        ]);
+    }
+
+    /**
+     * One crawl row. `parent` is set only for variations.
+     */
+    private function crawl_item($product, $parent) {
+        $id = $product->get_id();
+        $name = $product->get_name();
+
+        if ($parent) {
+            // نام واریانت به‌تنهایی «Parent - Attr» است یا اصلاً خالی؛
+            // برچسب ویژگی‌ها را می‌چسبانیم تا در CRM کالای قابل‌تشخیص باشد.
+            $attributes = array_filter(array_values($product->get_variation_attributes()));
+            $suffix = $attributes ? ' - ' . implode(' / ', $attributes) : '';
+            $name = $parent->get_name() . $suffix;
+        }
+
+        $stock = $product->get_stock_quantity();
+
+        return [
+            'id' => $id,
+            'parent_id' => $parent ? $parent->get_id() : 0,
+            'name' => $name,
+            'label' => $name,
+            'type' => $parent ? 'variation' : $product->get_type(),
+            'sku' => $product->get_sku(),
+            'price' => $product->get_price(),
+            'regular_price' => $product->get_regular_price(),
+            'sale_price' => $product->get_sale_price(),
+            'manage_stock' => (bool) $product->get_manage_stock(),
+            'stock_quantity' => $stock === null ? null : (float) $stock,
+            'in_stock' => $product->is_in_stock(),
+            'permalink' => get_permalink($parent ? $parent->get_id() : $id),
+            // اگر قبلاً به CRM وصل شده، کد انبارش اینجاست؛ برای تشخیص تکراری.
+            'course_id' => get_post_meta($id, 'course_id', true),
+            'portal_category' => get_post_meta($parent ? $parent->get_id() : $id, 'portal_category', true),
+        ];
+    }
+
     /**
      * Sync product from portal
      */

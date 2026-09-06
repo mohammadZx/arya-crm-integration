@@ -105,6 +105,9 @@ final class Arya_Portal_Integration {
      * Load plugin dependencies
      */
     private function load_dependencies() {
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Logger.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/LogViewer.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/FrontendLogger.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/PersonData.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Settings.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/REST_API.php';
@@ -121,6 +124,11 @@ final class Arya_Portal_Integration {
     public function load_plugin() {
         // Initialize settings
         Arya\Portal\Settings::instance();
+
+        // Initialize Logger first: everything after this point can report failures.
+        Arya\Portal\Logger::instance();
+        Arya\Portal\LogViewer::instance();
+        Arya\Portal\FrontendLogger::instance();
 
         // Initialize Admin
         Arya\Portal\Admin::instance();
@@ -158,6 +166,16 @@ final class Arya_Portal_Integration {
      * Plugin deactivation
      */
     public function deactivate() {
+        // Clear log cron jobs
+        $timestamp = wp_next_scheduled('arya_portal_flush_log_queue');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'arya_portal_flush_log_queue');
+        }
+        $timestamp = wp_next_scheduled('arya_portal_purge_logs');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'arya_portal_purge_logs');
+        }
+
         // Flush rewrite rules
         flush_rewrite_rules();
     }

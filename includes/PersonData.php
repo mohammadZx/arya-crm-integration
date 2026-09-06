@@ -40,12 +40,243 @@ class PersonData {
 
         return $headers;
     }
+
+    /* ===============================================================
+     |  لایهٔ واحدِ فراخوانی وب‌سرویس
+     |
+     |  هر متد این کلاس به‌جای wp_remote_get/wp_remote_post، ws_get/ws_post را
+     |  صدا می‌زند. خروجیِ این دو *دقیقاً* همان چیزی است که توابع وردپرس
+     |  برمی‌گردانند (آرایهٔ پاسخ یا WP_Error)، پس رفتار هیچ فراخوانی عوض
+     |  نمی‌شود؛ تنها چیزی که اضافه شده، تشخیص و ثبت علتِ شکست است.
+     |
+     |  تفکیک علت‌ها عمدی است: «پاسخ نیامد» با «پاسخ آمد ولی ۵۰۰ بود» و با
+     |  «پاسخ آمد ولی JSON نبود» سه مشکل کاملاً متفاوت‌اند و تا وقتی هر سه
+     |  «خطایی رخ داد» گزارش می‌شدند، عیب‌یابی ناممکن بود.
+     ===============================================================*/
+
+    /** @var array|null آخرین خطای وب‌سرویس در این نمونه. */
+    private $last_error = null;
+
+    /**
+     * آخرین خطای ثبت‌شده: ['code' => .., 'event_id' => .., 'message' => .., 'http_status' => ..]
+     * فراخوان‌ها از این برای نشان دادن کد خطا به کاربر استفاده می‌کنند.
+     */
+    public function getLastError() {
+        return $this->last_error;
+    }
+
+    public function clearLastError() {
+        $this->last_error = null;
+    }
+
+    /**
+     * GET با لاگ. خروجی: همان خروجی wp_remote_get.
+     */
+    private function ws_get($url, $args = []) {
+        return $this->ws_request('GET', $url, $args);
+    }
+
+    /**
+     * POST با لاگ. خروجی: همان خروجی wp_remote_post.
+     */
+    private function ws_post($url, $args = []) {
+        return $this->ws_request('POST', $url, $args);
+    }
+
+    private function ws_request($method, $url, $args) {
+        $this->last_error = null;
+        $operation = $this->calling_method();
+        $endpoint  = $this->relative_endpoint($url);
+
+        // تنظیمات ناقص را همین‌جا می‌گوییم، ولی جلوی درخواست را نمی‌گیریم تا
+        // رفتار قبلی (تلاش و شکست) دست‌نخورده بماند.
+        if (empty($this->portal_url) || empty($this->api_token)) {
+            $this->record_error(
+                Logger::WS_NOT_CONFIGURED,
+                'آدرس پورتال یا توکن API تنظیم نشده است.',
+                [
+                    'operation'    => $operation,
+                    'endpoint'     => $endpoint,
+                    'has_url'      => !empty($this->portal_url),
+                    'has_token'    => !empty($this->api_token),
+                ],
+                Logger::LEVEL_WARNING
+            );
+        }
+
+        $response = $method === 'POST' ? wp_remote_post($url, $args) : wp_remote_get($url, $args);
+
+        if (is_wp_error($response)) {
+            $this->record_error(
+                Logger::WS_REQUEST_FAILED,
+                'درخواست به وب‌سرویس نرسید: ' . $response->get_error_message(),
+                [
+                    'operation'  => $operation,
+                    'endpoint'   => $endpoint,
+                    'method'     => $method,
+                    'wp_error'   => $response->get_error_code(),
+                    'wp_message' => $response->get_error_message(),
+                ]
+            );
+            return $response;
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($response);
+        $body   = (string) wp_remote_retrieve_body($response);
+
+        if ($status < 200 || $status >= 300) {
+            $this->record_error(
+                Logger::WS_HTTP_STATUS,
+                'وب‌سرویس کد وضعیت ' . $status . ' برگرداند.',
+                [
+                    'operation'    => $operation,
+                    'endpoint'     => $endpoint,
+                    'method'       => $method,
+                    'http_status'  => $status,
+                    'body_preview' => mb_substr($body, 0, 1000),
+                ]
+            );
+            return $response;
+        }
+
+        if ($body === '') {
+            $this->record_error(
+                Logger::WS_EMPTY_BODY,
+                'پاسخ وب‌سرویس خالی بود.',
+                [
+                    'operation'   => $operation,
+                    'endpoint'    => $endpoint,
+                    'method'      => $method,
+                    'http_status' => $status,
+                ]
+            );
+            return $response;
+        }
+
+        json_decode($body);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->record_error(
+                Logger::WS_INVALID_JSON,
+                'پاسخ وب‌سرویس JSON معتبر نبود: ' . json_last_error_msg(),
+                [
+                    'operation'    => $operation,
+                    'endpoint'     => $endpoint,
+                    'method'       => $method,
+                    'http_status'  => $status,
+                    'json_error'   => json_last_error_msg(),
+                    'body_preview' => mb_substr($body, 0, 1000),
+                ]
+            );
+        }
+
+        return $response;
+    }
+
+    /**
+     * ثبت یک کلیدِ غایب در پاسخ CRM.
+     *
+     * دقیقاً همان چیزی است که عیب‌یابی فرم تکمیل اطلاعات لازم داشت: به‌جای
+     * «خطایی رخ داد»، بگوید کدام پارامتر نبود.
+     *
+     * @param array $required کلیدهایی که باید باشند.
+     * @return string[] کلیدهای غایب.
+     */
+    public function reportMissingFields($payload, array $required, $operation, $endpoint = null) {
+        $missing = [];
+
+        foreach ($required as $key) {
+            $present = is_array($payload)
+                ? (isset($payload[$key]) && $payload[$key] !== '' && $payload[$key] !== [])
+                : (is_object($payload) && isset($payload->{$key}) && $payload->{$key} !== '' && $payload->{$key} !== []);
+
+            if (!$present) {
+                $missing[] = $key;
+            }
+        }
+
+        if ($missing) {
+            $this->record_error(
+                Logger::WS_MISSING_FIELD,
+                'کلیدهای موردنیاز در پاسخ وب‌سرویس نبودند: ' . implode('، ', $missing),
+                [
+                    'operation' => $operation,
+                    'endpoint'  => $endpoint ?: $this->relative_endpoint(''),
+                    'missing'   => $missing,
+                    'received'  => $this->payload_keys($payload),
+                ]
+            );
+        }
+
+        return $missing;
+    }
+
+    /** کلیدهای سطح‌اولِ پاسخ؛ برای اینکه در لاگ ببینیم CRM واقعاً چه فرستاده. */
+    private function payload_keys($payload) {
+        if (is_array($payload)) {
+            return array_slice(array_keys($payload), 0, 50);
+        }
+        if (is_object($payload)) {
+            return array_slice(array_keys(get_object_vars($payload)), 0, 50);
+        }
+        return [];
+    }
+
+    /**
+     * ثبت خطا در Logger و نگه‌داشتنش به‌عنوان «آخرین خطا».
+     */
+    private function record_error($code, $message, $context = [], $level = Logger::LEVEL_ERROR) {
+        $event_id = '';
+
+        if (class_exists('\Arya\Portal\Logger')) {
+            $context['phone'] = $context['phone'] ?? $this->phone;
+            $event_id = Logger::instance()->log($code, $message, $context, $level, Logger::SOURCE_PORTAL);
+        } else {
+            error_log('[arya-portal][' . $code . '] ' . $message);
+        }
+
+        // هشدارِ «تنظیم نشده» نباید خطای واقعیِ بعدی را از last_error بیرون کند.
+        if ($level === Logger::LEVEL_ERROR || $this->last_error === null) {
+            $this->last_error = [
+                'code'        => $code,
+                'event_id'    => $event_id,
+                'message'     => $message,
+                'http_status' => $context['http_status'] ?? null,
+                'reference'   => Logger::reference($code, $event_id),
+            ];
+        }
+
+        return $event_id;
+    }
+
+    /** نام متدی که ws_get/ws_post را صدا زده؛ برای برچسب‌گذاری لاگ. */
+    private function calling_method() {
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4);
+
+        foreach ($trace as $frame) {
+            $fn = $frame['function'] ?? '';
+            if (in_array($fn, ['calling_method', 'ws_request', 'ws_get', 'ws_post'], true)) {
+                continue;
+            }
+            return $fn ?: 'unknown';
+        }
+
+        return 'unknown';
+    }
+
+    /** مسیر نسبی سرویس، بدون دامنهٔ پورتال — لاگ خواناتر و کوتاه‌تر می‌شود. */
+    private function relative_endpoint($url) {
+        $url = (string) $url;
+        if ($this->portal_path && strpos($url, $this->portal_path) === 0) {
+            return substr($url, strlen($this->portal_path));
+        }
+        return $url;
+    }
     
     /**
      * Insert person
      */
     public function insertPerson($userData) {
-        $response = wp_remote_post($this->portal_path . 'person/', [
+        $response = $this->ws_post($this->portal_path . 'person/', [
             'headers' => $this->get_headers(),
             'body' => [
                 'phone' => $userData->user_login,
@@ -64,7 +295,7 @@ class PersonData {
      */
     public function getPersonByPhone($phone) {
         $this->phone = $phone;
-        $response = wp_remote_get($this->portal_path . 'person/' . $phone, [
+        $response = $this->ws_get($this->portal_path . 'person/' . $phone, [
             'headers' => $this->get_headers(),
         ]);
 
@@ -75,7 +306,7 @@ class PersonData {
      * Get person registers
      */
     public function getPersonRegisters() {
-        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/register', [
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/register', [
             'headers' => $this->get_headers(),
         ]);
 
@@ -86,7 +317,7 @@ class PersonData {
      * Get CRM discounts catalog for the logged-in trainee profile.
      */
     public function getPersonDiscounts() {
-        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/discounts', [
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/discounts', [
             'headers' => $this->get_headers(),
         ]);
 
@@ -97,7 +328,7 @@ class PersonData {
      * فهرست پورسانت‌های معرف در CRM برای صفحه مارکتینگ سایت.
      */
     public function getPersonBonuses() {
-        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/bonuses', [
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/bonuses', [
             'headers' => $this->get_headers(),
             'timeout' => 30,
         ]);
@@ -109,7 +340,7 @@ class PersonData {
      * @return array{0: int, 1: mixed}
      */
     public function claimPersonBonus($bonusId) {
-        $response = wp_remote_post($this->portal_path . 'person/' . $this->phone . '/bonuses/' . intval($bonusId) . '/claim-wallet', [
+        $response = $this->ws_post($this->portal_path . 'person/' . $this->phone . '/bonuses/' . intval($bonusId) . '/claim-wallet', [
             'headers' => $this->get_headers(),
             'timeout' => 45,
         ]);
@@ -124,7 +355,7 @@ class PersonData {
      * Get person certificates
      */
     public function getPersonCertificates() {
-        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/services?as_evidence=1', [
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/services?as_evidence=1', [
             'headers' => $this->get_headers(),
         ]);
 
@@ -135,7 +366,7 @@ class PersonData {
      * Get person available certificate to get
      */
     public function getPersonAvailableCertificateToGet() {
-        $response = wp_remote_get($this->portal_path . 'person/' . $this->phone . '/available-services', [
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/available-services', [
             'headers' => $this->get_headers(),
         ]);
 
@@ -146,7 +377,7 @@ class PersonData {
      * Get service by ID
      */
     public function getServiceById($id) {
-        $response = wp_remote_get($this->portal_path . 'service/' . $id, [
+        $response = $this->ws_get($this->portal_path . 'service/' . $id, [
             'headers' => $this->get_headers(),
         ]);
 
@@ -176,23 +407,96 @@ class PersonData {
         ]);
 
         $response = curl_exec($ch);
+        $http_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         
         if ($response === false) {
             $error = curl_error($ch);
             $error_code = curl_errno($ch);
             curl_close($ch);
+
+            $this->record_error(
+                Logger::WS_CURL_ERROR,
+                'ارسال اطلاعات کاربر با cURL شکست خورد: ' . $error,
+                [
+                    'operation'  => 'updatePersonInfo',
+                    'endpoint'   => $this->relative_endpoint($url),
+                    'curl_errno' => $error_code,
+                    'curl_error' => $error,
+                    'sent_keys'  => $this->payload_keys($data),
+                ]
+            );
+
             return ["cURL Error #$error_code: $error"];
         }
 
         curl_close($ch);
+
+        $this->inspect_raw_response($response, $http_code, 'updatePersonInfo', $this->relative_endpoint($url), [
+            'sent_keys' => $this->payload_keys($data),
+        ]);
+
         return json_decode($response);
+    }
+
+    /**
+     * بررسی پاسخِ خامِ مسیرهای cURL (که از ws_request عبور نمی‌کنند).
+     *
+     * همان چهار تفکیکِ ws_request: وضعیت، خالی بودن، JSON نامعتبر و خطای
+     * منطقیِ اعلام‌شده در بدنه.
+     */
+    private function inspect_raw_response($raw, $http_code, $operation, $endpoint, $context = []) {
+        $base = array_merge($context, [
+            'operation'   => $operation,
+            'endpoint'    => $endpoint,
+            'http_status' => $http_code,
+        ]);
+
+        if ($http_code < 200 || $http_code >= 300) {
+            $this->record_error(
+                Logger::WS_HTTP_STATUS,
+                'وب‌سرویس کد وضعیت ' . $http_code . ' برگرداند.',
+                array_merge($base, ['body_preview' => mb_substr((string) $raw, 0, 1000)])
+            );
+            return;
+        }
+
+        if ((string) $raw === '') {
+            $this->record_error(Logger::WS_EMPTY_BODY, 'پاسخ وب‌سرویس خالی بود.', $base);
+            return;
+        }
+
+        $decoded = json_decode((string) $raw, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->record_error(
+                Logger::WS_INVALID_JSON,
+                'پاسخ وب‌سرویس JSON معتبر نبود: ' . json_last_error_msg(),
+                array_merge($base, [
+                    'json_error'   => json_last_error_msg(),
+                    'body_preview' => mb_substr((string) $raw, 0, 1000),
+                ])
+            );
+            return;
+        }
+
+        // CRM با کد ۲۰۰ ولی alert.type=error جواب رد می‌دهد؛ این هم خطاست.
+        if (is_array($decoded) && ($decoded['alert']['type'] ?? '') === 'error') {
+            $message = $decoded['alert']['message'] ?? '';
+            $this->record_error(
+                Logger::WS_API_ERROR,
+                'وب‌سرویس درخواست را رد کرد: ' . (is_array($message) ? implode(' | ', array_map('strval', $message)) : (string) $message),
+                array_merge($base, [
+                    'alert'  => $decoded['alert'],
+                    'errors' => $decoded['errors'] ?? null,
+                ])
+            );
+        }
     }
     
     /**
      * Set person service
      */
     public function setPersonService($data) {
-        $response = wp_remote_post($this->portal_path . 'person/' . $this->phone . '/services', [
+        $response = $this->ws_post($this->portal_path . 'person/' . $this->phone . '/services', [
             'headers' => $this->get_headers(),
             'body' => ([
                 'service_id' => $data['service_id'],
@@ -226,15 +530,34 @@ class PersonData {
         ]);
 
         $response = curl_exec($ch);
+        $http_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         
         if ($response === false) {
             $error = curl_error($ch);
             $error_code = curl_errno($ch);
             curl_close($ch);
+
+            $this->record_error(
+                Logger::WS_CURL_ERROR,
+                'ارسال تمرین با cURL شکست خورد: ' . $error,
+                [
+                    'operation'   => 'addUserExercises',
+                    'endpoint'    => $this->relative_endpoint($url),
+                    'exercise_id' => $exercise_id,
+                    'curl_errno'  => $error_code,
+                    'curl_error'  => $error,
+                ]
+            );
+
             return ["cURL Error #$error_code: $error"];
         }
 
         curl_close($ch);
+
+        $this->inspect_raw_response($response, $http_code, 'addUserExercises', $this->relative_endpoint($url), [
+            'exercise_id' => $exercise_id,
+        ]);
+
         return json_decode($response);
     }
     
@@ -242,7 +565,7 @@ class PersonData {
      * Get register payments
      */
     public function getRegisterPyametns($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/payment", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/payment", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -253,7 +576,7 @@ class PersonData {
      * Get register sessions
      */
     public function getRegisterSessions($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/session", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/session", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -264,7 +587,7 @@ class PersonData {
      * Get register headlines
      */
     public function getRegisterHeadlines($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/headlines", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/headlines", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -275,7 +598,7 @@ class PersonData {
      * Get register exercises
      */
     public function getRegisterExercises($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/exercises", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/exercises", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -286,7 +609,7 @@ class PersonData {
      * Get register rollcalls
      */
     public function getRegisterRollcalls($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/rollcall", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}/rollcall", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -297,7 +620,7 @@ class PersonData {
      * Get person register by ID
      */
     public function getPersonRegisterById($regid) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/register/{$regid}", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/{$regid}", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -308,7 +631,7 @@ class PersonData {
      * Get register by ID
      */
     public function getRegisterById($regid) {
-        $response = wp_remote_get("{$this->portal_path}register/{$regid}/with-dependencies", [
+        $response = $this->ws_get("{$this->portal_path}register/{$regid}/with-dependencies", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -319,7 +642,7 @@ class PersonData {
      * Get service register by ID
      */
     public function getServiceRegisterById($regid) {
-        $response = wp_remote_get("{$this->portal_path}service-register/{$regid}", [
+        $response = $this->ws_get("{$this->portal_path}service-register/{$regid}", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -330,7 +653,7 @@ class PersonData {
      * Set payment remote
      */
     public function setPaymentRemote($regid, $price, $orderId, $extra_data) {
-        $response = wp_remote_post("{$this->portal_path}remote-pay-payment", [
+        $response = $this->ws_post("{$this->portal_path}remote-pay-payment", [
             'body' => ([
                 'register_id' => $regid,
                 'price' => $price,
@@ -347,7 +670,7 @@ class PersonData {
      * Get person data
      */
     public function getPersonData() {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/data", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/data", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -358,7 +681,7 @@ class PersonData {
      * Get info dependency
      */
     public function getInfoDependency() {
-        $response = wp_remote_get("{$this->portal_path}option/dependency", [
+        $response = $this->ws_get("{$this->portal_path}option/dependency", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -377,34 +700,89 @@ class PersonData {
         $phone = $phone ?: $this->phone;
         $this->phone = $phone;
 
+        $endpoint = 'person/' . $phone . '/data/form';
         $error_message = 'خطایی پیش آمده. در حال بررسی هستیم. لطفا چند ساعت دیگر مجدد بازدید نمایید.';
 
         if (empty($this->portal_url) || empty($this->api_token) || empty($phone)) {
-            return ['success' => false, 'error' => $error_message];
+            $this->record_error(
+                Logger::USERINFO_NOT_CONFIGURED,
+                'فرم اطلاعات بدون آدرس پورتال/توکن/شماره قابل دریافت نیست.',
+                [
+                    'operation' => 'getPersonDataForm',
+                    'endpoint'  => $endpoint,
+                    'has_url'   => !empty($this->portal_url),
+                    'has_token' => !empty($this->api_token),
+                    'has_phone' => !empty($phone),
+                ]
+            );
+            return $this->formFailure($error_message);
         }
 
-        $response = wp_remote_get($this->portal_path . 'person/' . $phone . '/data/form', [
+        $response = $this->ws_get($this->portal_path . $endpoint, [
             'timeout' => 20,
             'headers' => $this->get_headers(),
         ]);
 
         if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
-            return ['success' => false, 'error' => $error_message];
+            // ws_get کد دقیق (WS_REQUEST_FAILED یا WS_HTTP_STATUS) را ثبت کرده است.
+            return $this->formFailure($error_message);
         }
 
         $bundle = json_decode(wp_remote_retrieve_body($response));
-        if (!is_object($bundle)
-            || empty($bundle->person)
-            || empty($bundle->personData)
-            || empty($bundle->dependency)
-            || empty($bundle->schema)) {
-            return ['success' => false, 'error' => $error_message];
+
+        if (!is_object($bundle)) {
+            $this->record_error(
+                Logger::USERINFO_INVALID_SCHEMA,
+                'پاسخ فرم اطلاعات یک شیء JSON نبود.',
+                [
+                    'operation'     => 'getPersonDataForm',
+                    'endpoint'      => $endpoint,
+                    'received_type' => gettype($bundle),
+                ]
+            );
+            return $this->formFailure($error_message);
+        }
+
+        // اینجا همان نقطه‌ای است که «کدام پارامتر نبود» را مشخص می‌کند.
+        $missing = $this->reportMissingFields(
+            $bundle,
+            ['person', 'personData', 'dependency', 'schema'],
+            'getPersonDataForm',
+            $endpoint
+        );
+
+        if ($missing) {
+            return $this->formFailure($error_message, Logger::USERINFO_MISSING_FIELD);
         }
 
         $schema = json_decode(json_encode($bundle->schema), true);
         if (!is_array($schema) || empty($schema['fields'])) {
-            return ['success' => false, 'error' => $error_message];
+            $this->record_error(
+                Logger::USERINFO_INVALID_SCHEMA,
+                'اسکیمای فرم اطلاعات فیلدی نداشت.',
+                [
+                    'operation'    => 'getPersonDataForm',
+                    'endpoint'     => $endpoint,
+                    'schema_type'  => gettype($schema),
+                    'schema_keys'  => is_array($schema) ? array_keys($schema) : [],
+                ]
+            );
+            return $this->formFailure($error_message);
         }
+
+        // بخش‌های اختیاریِ خالی مانع نمایش فرم نیستند، ولی باید دیده شوند.
+        foreach (['translations', 'fieldReviews'] as $optional) {
+            if (!isset($bundle->{$optional})) {
+                $this->record_error(
+                    Logger::USERINFO_EMPTY_SECTION,
+                    'بخش «' . $optional . '» در پاسخ فرم اطلاعات نبود.',
+                    ['operation' => 'getPersonDataForm', 'endpoint' => $endpoint, 'section' => $optional],
+                    Logger::LEVEL_WARNING
+                );
+            }
+        }
+
+        $this->clearLastError();
 
         return [
             'success'      => true,
@@ -417,6 +795,26 @@ class PersonData {
         ];
     }
     
+    /**
+     * پاسخ شکستِ فرم اطلاعات، همراه با کد خطا و شناسهٔ رخداد.
+     *
+     * کلیدهای success/error دست‌نخورده‌اند تا فراخوان‌های قدیمی نشکنند؛
+     * code/event_id/reference افزوده شده‌اند تا کاربر کدی برای پیگیری ببیند.
+     */
+    private function formFailure($message, $fallback_code = null) {
+        $error = $this->getLastError();
+        $code = $error['code'] ?? $fallback_code ?? Logger::USERINFO_WS_FAILED;
+        $event_id = $error['event_id'] ?? '';
+
+        return [
+            'success'   => false,
+            'error'     => $message,
+            'code'      => $code,
+            'event_id'  => $event_id,
+            'reference' => Logger::reference($code, $event_id),
+        ];
+    }
+
     /**
      * Get exams
      */
@@ -435,7 +833,7 @@ class PersonData {
             $url .= '?' . http_build_query($params);
         }
         
-        $response = wp_remote_get($url, [
+        $response = $this->ws_get($url, [
             'headers' => $this->get_headers(),
         ]);
         
@@ -446,7 +844,7 @@ class PersonData {
      * Get exam
      */
     public function get_exam($id) {
-        $response = wp_remote_get("{$this->portal_path}exam/{$id}", [
+        $response = $this->ws_get("{$this->portal_path}exam/{$id}", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -457,7 +855,7 @@ class PersonData {
      * Get user exams
      */
     public function get_user_exams() {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/exam", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/exam", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -468,7 +866,7 @@ class PersonData {
      * Get user exam
      */
     public function get_user_exam($id) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/exam/{$id}", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/exam/{$id}", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -479,7 +877,7 @@ class PersonData {
      * Get quiz
      */
     public function get_quiz($id) {
-        $response = wp_remote_get("{$this->portal_path}exam/{$id}/quiz", [
+        $response = $this->ws_get("{$this->portal_path}exam/{$id}/quiz", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -494,7 +892,7 @@ class PersonData {
             return false;
         }
 
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/exam/{$examId}/check-access", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/exam/{$examId}/check-access", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -511,7 +909,7 @@ class PersonData {
      * Save user exam
      */
     public function saveUserExam($data) {
-        $response = wp_remote_post("{$this->portal_path}user-exam", [
+        $response = $this->ws_post("{$this->portal_path}user-exam", [
             'body' => ([
                 'user_id' => $data['user_id']->id,
                 'report' => $data['report'],
@@ -527,7 +925,7 @@ class PersonData {
      * Add user exam
      */
     public function add_user_exam($id) {
-        $response = wp_remote_get("{$this->portal_path}person/{$this->phone}/exam/{$id}/add", [
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/exam/{$id}/add", [
             'headers' => $this->get_headers(),
         ]);
         
@@ -538,7 +936,7 @@ class PersonData {
      * Set exam payment remote
      */
     public function setExamPaymentRemote($examId, $price, $orderId) {
-        $response = wp_remote_post("{$this->portal_path}remote-pay-exam", [
+        $response = $this->ws_post("{$this->portal_path}remote-pay-exam", [
             'body' => ([
                 'user_id' => $this->phone,
                 'exam_id' => $examId,
@@ -555,7 +953,7 @@ class PersonData {
      * Inquiry certificate
      */
     public function inquiry_certificate($ncode, $code, $lang = 'fa') {
-        $response = wp_remote_get("{$this->portal_path}person/{$ncode}/register/{$code}/inquiry/?lang=" . $lang, [
+        $response = $this->ws_get("{$this->portal_path}person/{$ncode}/register/{$code}/inquiry/?lang=" . $lang, [
             'headers' => $this->get_headers(),
         ]);
 
@@ -566,7 +964,7 @@ class PersonData {
      * Inquiry list
      */
     public function inquiry_list($ncode) {
-        $response = wp_remote_get("{$this->portal_path}service-register/inquiry/{$this->phone}/{$ncode}", [
+        $response = $this->ws_get("{$this->portal_path}service-register/inquiry/{$this->phone}/{$ncode}", [
             'headers' => $this->get_headers(),
         ]);
 
@@ -577,7 +975,7 @@ class PersonData {
      * Get survey question
      */
     public function get_survey_question($data) {
-        $response = wp_remote_post("{$this->portal_path}survey/get-questions", [
+        $response = $this->ws_post("{$this->portal_path}survey/get-questions", [
             'headers' => $this->get_headers(),
             'body' => ([
                 'phone' => $data['phone'],
@@ -592,7 +990,7 @@ class PersonData {
      * Send survey
      */
     public function send_survey($data) {
-        $response = wp_remote_post("{$this->portal_path}survey", [
+        $response = $this->ws_post("{$this->portal_path}survey", [
             'headers' => $this->get_headers(),
             'body' => ($data)
         ]);
@@ -604,7 +1002,7 @@ class PersonData {
      * Class course videos
      */
     public function class_course_videos($data) {
-        $response = wp_remote_post("{$this->portal_path}class-course/get-videos", [
+        $response = $this->ws_post("{$this->portal_path}class-course/get-videos", [
             'headers' => $this->get_headers(),
             'body' => ($data)
         ]);
@@ -616,7 +1014,7 @@ class PersonData {
      * Send complaint
      */
     public function send_complaint($phone, $course_code, $content, $for) {
-        $response = wp_remote_post("{$this->portal_path}complaint", [
+        $response = $this->ws_post("{$this->portal_path}complaint", [
             'headers' => $this->get_headers(),
             'body' => ([
                 'phone' => $phone,
@@ -633,7 +1031,7 @@ class PersonData {
      * Force register
      */
     public function forceRegister($registerData) {
-        $response = wp_remote_post("{$this->portal_path}remote-force-register", [
+        $response = $this->ws_post("{$this->portal_path}remote-force-register", [
             'headers' => $this->get_headers(),
             'body' => ($registerData)
         ]);
@@ -645,7 +1043,7 @@ class PersonData {
      * Force request
      */
     public function forceRequest($registerData) {
-        $response = wp_remote_post("{$this->portal_path}remote-force-request", [
+        $response = $this->ws_post("{$this->portal_path}remote-force-request", [
             'headers' => $this->get_headers(),
             'body' => ($registerData)
         ]);
@@ -660,14 +1058,56 @@ class PersonData {
      */
     public function getPersonAlert($phoneOrId = null) {
         $id = $phoneOrId ?: $this->phone;
-        $response = wp_remote_get($this->portal_path . 'person/' . $id . '/get-alert', [
+        $endpoint = 'person/' . $id . '/get-alert';
+
+        if (empty($id)) {
+            $this->record_error(
+                Logger::ALERT_NO_PHONE,
+                'شناسه/شماره‌ای برای دریافت هشدارها وجود ندارد.',
+                ['operation' => 'getPersonAlert', 'endpoint' => $endpoint]
+            );
+            return null;
+        }
+
+        $response = $this->ws_get($this->portal_path . $endpoint, [
             'headers' => $this->get_headers(),
         ]);
+
+        // ws_get علت دقیق را ثبت کرده؛ اینجا فقط قرارداد قبلی (null) حفظ می‌شود.
         $body = wp_remote_retrieve_body($response);
         if (empty($body) || wp_remote_retrieve_response_code($response) !== 200) {
             return null;
         }
-        return json_decode($body);
+
+        $decoded = json_decode($body);
+
+        if (!is_object($decoded)) {
+            $this->record_error(
+                Logger::ALERT_INVALID_DATA,
+                'پاسخ هشدارها یک شیء JSON نبود.',
+                [
+                    'operation'    => 'getPersonAlert',
+                    'endpoint'     => $endpoint,
+                    'received_type' => gettype($decoded),
+                    'body_preview' => mb_substr($body, 0, 500),
+                ]
+            );
+            return $decoded;
+        }
+
+        if (!isset($decoded->data)) {
+            $this->record_error(
+                Logger::ALERT_MISSING_DATA,
+                'پاسخ هشدارها کلید data نداشت.',
+                [
+                    'operation' => 'getPersonAlert',
+                    'endpoint'  => $endpoint,
+                    'received'  => $this->payload_keys($decoded),
+                ]
+            );
+        }
+
+        return $decoded;
     }
     
     /**
@@ -675,7 +1115,7 @@ class PersonData {
      */
     public function hasRegisterBefore($phone = false) {
         $phone = $phone ? $phone : $this->phone;
-        $response = wp_remote_get("{$this->portal_path}has-register/" . $phone, [
+        $response = $this->ws_get("{$this->portal_path}has-register/" . $phone, [
             'headers' => $this->get_headers()
         ]);
 
@@ -749,7 +1189,7 @@ class PersonData {
             return $defaults;
         }
 
-        $response = wp_remote_get($this->portal_path . 'get-utilities', [
+        $response = $this->ws_get($this->portal_path . 'get-utilities', [
             'timeout' => 15,
             'headers' => $this->get_headers(),
         ]);
@@ -810,7 +1250,7 @@ class PersonData {
             'filter_option_key' => 'cooperation_skill',
         ]);
 
-        $response = wp_remote_get($url, [
+        $response = $this->ws_get($url, [
             'timeout' => 15,
             'headers' => $this->get_headers(),
         ]);
@@ -932,8 +1372,19 @@ class PersonData {
             curl_close($ch);
 
             if ($raw === false) {
+                $this->record_error(
+                    Logger::WS_CURL_ERROR,
+                    'ارسال درخواست همکاری با cURL شکست خورد: ' . $err,
+                    [
+                        'operation'  => 'submitCooperationRequest',
+                        'endpoint'   => $this->relative_endpoint($url),
+                        'curl_error' => $err,
+                    ]
+                );
                 return ['success' => false, 'status' => 0, 'message' => $err ?: 'cURL error', 'body' => null];
             }
+
+            $this->inspect_raw_response($raw, $code, 'submitCooperationRequest', $this->relative_endpoint($url));
 
             $decoded = json_decode($raw, true);
             $ok = $this->cooperation_api_success($code, $decoded);
@@ -947,7 +1398,7 @@ class PersonData {
 
         $headers = array_merge($this->get_headers(), ['Content-Type' => 'application/json']);
 
-        $response = wp_remote_post($url, [
+        $response = $this->ws_post($url, [
             'timeout' => 25,
             'headers' => $headers,
             'body'    => wp_json_encode($data),
@@ -968,5 +1419,126 @@ class PersonData {
             'body'    => $decoded,
         ];
     }
-}
 
+    /* ===============================================================
+     |  تالار گفتگو (Rocket.Chat)
+     |
+     |  سایت هرگز مستقیم با راکت‌چت حرف نمی‌زند. همه چیز از CRM رد می‌شود تا
+     |  throttle، circuit breaker، کش هویت و لاگ‌ها یک جا جمع باشند و توکن
+     |  ادمین راکت‌چت هیچ‌وقت روی سایت ننشیند.
+     ===============================================================*/
+
+    /** لینک ورود مستقیم به تالار (یا به یک گروه مشخص). */
+    public function getForumEntry($group = '') {
+        $url = $this->portal_path . 'person/' . $this->phone . '/forum/entry';
+
+        if ($group !== '') {
+            $url = add_query_arg('group', rawurlencode($group), $url);
+        }
+
+        $response = $this->ws_get($url, ['headers' => $this->get_headers()]);
+
+        return json_decode(wp_remote_retrieve_body($response), true);
+    }
+
+    /** فهرست تیکت‌های کاربر. */
+    public function getForumTickets() {
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/forum/tickets', [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response), true);
+    }
+
+    /** پیام‌های یک تیکت. */
+    public function getForumTicket($room_id) {
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/forum/tickets/' . rawurlencode($room_id), [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response), true);
+    }
+
+    /** دپارتمان‌ها برای فرم تیکت جدید. */
+    public function getForumDepartments() {
+        $response = $this->ws_get($this->portal_path . 'person/' . $this->phone . '/forum/departments', [
+            'headers' => $this->get_headers(),
+        ]);
+
+        $decoded = json_decode(wp_remote_retrieve_body($response), true);
+
+        return isset($decoded['data']) ? $decoded['data'] : [];
+    }
+
+    /** ثبت تیکت جدید (با پیوست اختیاری). */
+    public function createForumTicket(array $fields, $file = null) {
+        return $this->forum_multipart(
+            $this->portal_path . 'person/' . $this->phone . '/forum/tickets',
+            $fields,
+            $file
+        );
+    }
+
+    /** پاسخ کاربر داخل تیکت خودش (با پیوست اختیاری). */
+    public function replyForumTicket($room_id, array $fields, $file = null) {
+        return $this->forum_multipart(
+            $this->portal_path . 'person/' . $this->phone . '/forum/tickets/' . rawurlencode($room_id) . '/reply',
+            $fields,
+            $file
+        );
+    }
+
+    /**
+     * ارسال multipart به CRM. برای مسیرهایی که ممکن است فایل داشته باشند.
+     *
+     * @param  array       $fields فیلدهای متنی
+     * @param  array|null  $file   یک آیتم از $_FILES
+     * @return array
+     */
+    private function forum_multipart($url, array $fields, $file = null) {
+        if (!empty($file['tmp_name']) && empty($file['error']) && is_uploaded_file($file['tmp_name'])) {
+            $fields['file'] = new \CURLFile($file['tmp_name'], $file['type'], $file['name']);
+        }
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 45);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: multipart/form-data',
+            'Accept: application/json',
+            'Authorization: Bearer ' . $this->api_token,
+            'from_site: 1',
+        ]);
+
+        $body = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if ($body === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+
+            $this->record_error(
+                Logger::WS_CURL_ERROR,
+                'ارسال تیکت تالار با cURL شکست خورد: ' . $error,
+                ['endpoint' => $this->relative_endpoint($url), 'curl_error' => $error]
+            );
+
+            return ['success' => false, 'message' => 'ارتباط با سرور برقرار نشد.'];
+        }
+
+        curl_close($ch);
+        $decoded = json_decode($body, true);
+
+        if ($status < 200 || $status >= 300) {
+            $this->record_error(
+                Logger::WS_HTTP_STATUS,
+                'وب‌سرویس تالار کد وضعیت ' . $status . ' برگرداند.',
+                ['endpoint' => $this->relative_endpoint($url), 'http_status' => $status]
+            );
+        }
+
+        return is_array($decoded) ? $decoded : ['success' => false, 'message' => 'پاسخ نامعتبر از سرور.'];
+    }
+}
