@@ -39,6 +39,69 @@ class OrderHandler {
     }
     
     /**
+     * Resolve buyer phone/name from WP user or WooCommerce billing fields (guest checkout).
+     *
+     * @param \WC_Order $order
+     * @return array{phone: string, name: string}|null
+     */
+    private function resolve_buyer_from_order($order) {
+        $user = $order->get_user();
+
+        if ($user) {
+            $phone = trim((string) $user->user_login);
+            $name = trim((string) $user->display_name);
+
+            if ($phone !== '') {
+                return [
+                    'phone' => $phone,
+                    'name' => $name !== '' ? $name : $phone,
+                ];
+            }
+        }
+
+        $phone = trim((string) $order->get_billing_phone());
+        $name = trim(
+            trim((string) $order->get_billing_first_name()) . ' ' .
+            trim((string) $order->get_billing_last_name())
+        );
+
+        if ($name === '') {
+            $name = trim((string) $order->get_formatted_billing_full_name());
+        }
+
+        if ($phone === '') {
+            return null;
+        }
+
+        return [
+            'phone' => $phone,
+            'name' => $name !== '' ? $name : $phone,
+        ];
+    }
+
+    /**
+     * Log that order was not sent to CRM (visible in plugin log viewer).
+     *
+     * @param int    $order_id
+     * @param string $reason   Machine-readable reason key
+     * @param string $message  Human-readable Persian message
+     * @param array  $context  Extra context for debugging
+     * @param string $stage    payment_complete|order_request|build_payload
+     */
+    private function log_order_send_skipped($order_id, $reason, $message, $context = [], $stage = 'payment_complete') {
+        Logger::instance()->warning(
+            Logger::ORDER_SEND_SKIPPED,
+            $message,
+            array_merge([
+                'order_id' => $order_id,
+                'reason' => $reason,
+                'stage' => $stage,
+            ], $context),
+            Logger::SOURCE_PORTAL
+        );
+    }
+
+    /**
      * Insert order on portal after payment complete
      * 
      * @param int $order_id Order ID
@@ -46,13 +109,39 @@ class OrderHandler {
      * @return array|void
      */
     public function insert_on_portal($order_id, $get_info = false) {
+        $stage = $get_info ? 'build_payload' : 'payment_complete';
         $order = wc_get_order($order_id);
         
-        if (!$order || !is_user_logged_in()) {
+        if (!$order) {
+            $this->log_order_send_skipped(
+                $order_id,
+                'order_not_found',
+                'ارسال سفارش به CRM انجام نشد: سفارش پیدا نشد.',
+                [],
+                $stage
+            );
             return;
         }
-        
-        $user = wp_get_current_user();
+
+        $buyer = $this->resolve_buyer_from_order($order);
+        if (!$buyer) {
+            $this->log_order_send_skipped(
+                $order_id,
+                'no_phone',
+                'ارسال سفارش به CRM انجام نشد: شماره تلفن خریدار (کاربر یا billing_phone) موجود نیست.',
+                [
+                    'customer_id' => $order->get_customer_id(),
+                    'billing_phone' => (string) $order->get_billing_phone(),
+                    'billing_name' => trim(
+                        trim((string) $order->get_billing_first_name()) . ' ' .
+                        trim((string) $order->get_billing_last_name())
+                    ),
+                ],
+                $stage
+            );
+            return;
+        }
+
         $sendData = [];
         $productId = null;
         $varId = null;
@@ -98,8 +187,8 @@ class OrderHandler {
         }
 
         $sendData['coupons'] = $this->get_coupon_data($order);
-        $sendData['phone'] = $user->user_login;
-        $sendData['name'] = $user->display_name;
+        $sendData['phone'] = $buyer['phone'];
+        $sendData['name'] = $buyer['name'];
         $sendData['price'] = $order->get_total() - $order->get_shipping_total();
         $sendData['pay_price'] = $order->get_total() - $order->get_shipping_total();
         $sendData['shipping_price'] = $order->get_shipping_total();
@@ -135,7 +224,7 @@ class OrderHandler {
         }
 
         // Force register to portal
-        $personObject = new PersonData($user->user_login);
+        $personObject = new PersonData($buyer['phone']);
         $personData = $personObject->forceRegister($sendData);
         
         return;
@@ -248,19 +337,22 @@ class OrderHandler {
     public function insert_order_request_on_portal($order_id) {
         $sendData = $this->insert_on_portal($order_id, true);
         
-        if (!$sendData) {
+        if (!$sendData || empty($sendData['phone'])) {
+            // insert_on_portal already logs when it aborts; this covers empty payload edge cases.
+            if ($sendData && empty($sendData['phone'])) {
+                $this->log_order_send_skipped(
+                    $order_id,
+                    'no_phone',
+                    'ارسال درخواست سفارش به CRM انجام نشد: شماره تلفن در دادهٔ ارسالی خالی است.',
+                    [],
+                    'order_request'
+                );
+            }
             return;
         }
-        
-        $order = wc_get_order($order_id);
-        $user = $order->get_user();
-        
-        if (!$user) {
-            return;
-        }
-        
-        // Force register to portal
-        $personObject = new PersonData($user->user_login);
+
+        // Force register to portal (works for logged-in and guest buyers)
+        $personObject = new PersonData($sendData['phone']);
         $personData = $personObject->forceRequest($sendData);
     }
 }

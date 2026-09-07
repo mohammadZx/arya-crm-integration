@@ -103,6 +103,12 @@ class Logger {
     const JS_PROMISE_REJECTION  = 'JS_PROMISE_REJECTION';
     const JS_REQUEST_FAILED     = 'JS_REQUEST_FAILED';
 
+    /* ---------------------------------------------------------------
+     |  کدهای ارسال سفارش به CRM
+     ---------------------------------------------------------------- */
+    /** ارسال سفارش به CRM عمداً انجام نشد (دلیل در context.reason). */
+    const ORDER_SEND_SKIPPED = 'ORDER_SEND_SKIPPED';
+
     /** خودِ ارسال لاگ شکست خورد. هرگز فرستاده نمی‌شود؛ فقط محلی می‌ماند. */
     const LOG_SHIP_FAILED = 'LOG_SHIP_FAILED';
 
@@ -139,6 +145,7 @@ class Logger {
         self::JS_ERROR            => 'خطای جاوااسکریپت در مرورگر کاربر',
         self::JS_PROMISE_REJECTION => 'Promise رد شده در مرورگر کاربر',
         self::JS_REQUEST_FAILED   => 'درخواست AJAX در مرورگر کاربر شکست خورد',
+        self::ORDER_SEND_SKIPPED  => 'ارسال سفارش به CRM انجام نشد',
         self::LOG_SHIP_FAILED     => 'ارسال لاگ‌ها به CRM شکست خورد',
     ];
 

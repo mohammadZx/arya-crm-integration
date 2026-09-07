@@ -155,6 +155,42 @@ $person->getPersonRegisters();
 ok(in_array(Logger::WS_NOT_CONFIGURED, codes_logged(), true), 'نبودِ توکن کد WS_NOT_CONFIGURED می‌گیرد');
 $GLOBALS['arya_options']['arya_portal_api_token'] = 'test-token';
 
+echo "\n\033[1mورود با نام کاربری: بدون ارور سیستم\033[0m\n";
+
+reset_logs();
+$beforeHttp = count($GLOBALS['arya_http_log'] ?? []);
+$person = new PersonData('zahrasoltani');
+same(null, $person->getPersonBonuses(), 'نام کاربری => بدون فراخوانی، خروجی null');
+same(null, $person->getPersonDiscounts(), 'نام کاربری برای discounts هم null');
+same([], codes_logged(), 'نام کاربری لاگ WS_HTTP_STATUS نمی‌سازد');
+same(null, $person->getLastError(), 'نام کاربری last_error هم نمی‌گذارد');
+same($beforeHttp, count($GLOBALS['arya_http_log'] ?? []), 'نام کاربری درخواست HTTP به CRM نمی‌زند');
+
+reset_logs();
+$person = new PersonData('aryatehran_sh');
+$person->getPersonByPhone('aryatehran_sh');
+same([], codes_logged(), 'اکانت ادمین با نام کاربری هم خطا ثبت نمی‌کند');
+
+reset_logs();
+arya_queue_response(404, '{"message":"No query results for model [App\\\\Models\\\\User]."}');
+$person = new PersonData('09120000000');
+$result = $person->getPersonDiscounts();
+ok(is_object($result) && isset($result->message), '۴۰۴ کاربرِ ناموجود همچنان بدنه را برمی‌گرداند');
+same([], codes_logged(), '۴۰۴ مدل User روی person/* به‌عنوان خطا ثبت نمی‌شود');
+same(null, $person->getLastError(), '۴۰۴ کاربر ناموجود last_error هم نمی‌سازد');
+
+reset_logs();
+arya_queue_response(404, '{"message":"No query results for model [App\\\\Models\\\\Bonus]."}');
+$person = new PersonData('09120000000');
+$person->getPersonBonuses();
+same([Logger::WS_HTTP_STATUS], codes_logged(), '۴۰۴ مدل دیگر همچنان خطا است');
+
+reset_logs();
+arya_queue_response(500, '{"message":"boom"}');
+$person = new PersonData('09120000000');
+$person->getPersonBonuses();
+same([Logger::WS_HTTP_STATUS], codes_logged(), '۵۰۰ همچنان خطا است');
+
 echo "\n\033[1mgetPersonAlert: هیچ هشدار جعلی\033[0m\n";
 
 reset_logs();

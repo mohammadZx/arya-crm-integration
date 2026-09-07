@@ -88,6 +88,13 @@ class PersonData {
         $operation = $this->calling_method();
         $endpoint  = $this->relative_endpoint($url);
 
+        // ورود با نام کاربری (نه موبایل/شناسهٔ CRM) نباید درخواست person/* بزند
+        // و نباید WS_HTTP_STATUS به لاگ/CRM بفرستد — حساب‌های ادمین دائماً این مسیر را می‌زنند.
+        $lookupKey = $this->personLookupKeyFromEndpoint($endpoint);
+        if ($lookupKey !== null && !$this->isCrmPersonIdentifier($lookupKey)) {
+            return $this->syntheticHttpResponse(404, '');
+        }
+
         // تنظیمات ناقص را همین‌جا می‌گوییم، ولی جلوی درخواست را نمی‌گیریم تا
         // رفتار قبلی (تلاش و شکست) دست‌نخورده بماند.
         if (empty($this->portal_url) || empty($this->api_token)) {
@@ -125,6 +132,12 @@ class PersonData {
         $body   = (string) wp_remote_retrieve_body($response);
 
         if ($status < 200 || $status >= 300) {
+            // ۴۰۴ «کاربر در CRM نیست» برای مسیر person عادی است (مثلاً کاربر سایت
+            // هنوز در پورتال ساخته نشده) و نباید به عنوان خطای سیستم ثبت شود.
+            if ($this->isExpectedPersonNotFound($status, $body, $endpoint)) {
+                return $response;
+            }
+
             $this->record_error(
                 Logger::WS_HTTP_STATUS,
                 'وب‌سرویس کد وضعیت ' . $status . ' برگرداند.',
@@ -270,6 +283,70 @@ class PersonData {
             return substr($url, strlen($this->portal_path));
         }
         return $url;
+    }
+
+    /**
+     * کلید person/{id}/… یا has-register/{id}؛ null یعنی مسیر lookup شخص نیست.
+     */
+    private function personLookupKeyFromEndpoint($endpoint) {
+        $endpoint = (string) $endpoint;
+        if (preg_match('~^(?:person|has-register)/([^/?#]+)~', $endpoint, $m)) {
+            return rawurldecode($m[1]);
+        }
+        return null;
+    }
+
+    /**
+     * شناسه‌ای که CRM با id یا phone قبول می‌کند: فقط رقم (موبایل 09… یا id عددی).
+     * نام کاربری وردپرس (zahrasoltani، aryatehran_sh، …) اینجا رد می‌شود.
+     */
+    private function isCrmPersonIdentifier($id) {
+        $id = $this->normalizePersonDigits(trim((string) $id));
+        if ($id === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/^\d+$/', $id);
+    }
+
+    private function normalizePersonDigits($value) {
+        $native = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹', '٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+        $ascii  = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+        return str_replace($native, $ascii, (string) $value);
+    }
+
+    /**
+     * ۴۰۴ مدل User روی مسیر person — کاربر سایت در CRM نیست؛ خطای عملیاتی نیست.
+     */
+    private function isExpectedPersonNotFound($status, $body, $endpoint) {
+        if ((int) $status !== 404) {
+            return false;
+        }
+        if ($this->personLookupKeyFromEndpoint($endpoint) === null) {
+            return false;
+        }
+
+        $body = (string) $body;
+        if (strpos($body, 'No query results for model') === false) {
+            return false;
+        }
+
+        return stripos($body, 'User') !== false;
+    }
+
+    /** پاسخ ساختگی هم‌شکل خروجی wp_remote_* برای ردِ بی‌صدا بدون درخواست شبکه. */
+    private function syntheticHttpResponse($status, $body = '') {
+        return [
+            'headers'  => [],
+            'body'     => (string) $body,
+            'response' => [
+                'code'    => (int) $status,
+                'message' => $status === 404 ? 'Not Found' : 'Error',
+            ],
+            'cookies'  => [],
+            'filename' => null,
+        ];
     }
     
     /**
