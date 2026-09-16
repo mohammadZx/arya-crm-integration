@@ -727,16 +727,51 @@ class PersonData {
     }
     
     /**
-     * Set payment remote
+     * Payment fields shared by remote-pay endpoints (same as OrderHandler → forceRegister).
+     *
+     * CRM maps gate_way === 'WC_Wallet' to WALLET_GATEWAY, otherwise ONLINE_GATEWAY,
+     * and stores the raw WooCommerce method id in gate_way_name.
+     *
+     * @param int|\WC_Order|null $order_id
+     * @return array{gate_way?: string, transaction?: string}
+     */
+    private function payment_meta_from_order($order_id) {
+        if (!function_exists('wc_get_order')) {
+            return [];
+        }
+
+        $order = is_object($order_id) ? $order_id : wc_get_order($order_id);
+        if (!$order) {
+            return [];
+        }
+
+        $meta = [];
+        $gate_way = $order->get_payment_method();
+        if ($gate_way !== null && $gate_way !== '') {
+            $meta['gate_way'] = $gate_way;
+        }
+
+        $transaction = $order->get_transaction_id();
+        if ($transaction !== null && $transaction !== '') {
+            $meta['transaction'] = $transaction;
+        }
+
+        return $meta;
+    }
+
+    /**
+     * Set payment remote (course installment / certificate service fee / …)
      */
     public function setPaymentRemote($regid, $price, $orderId, $extra_data) {
+        $body = array_merge([
+            'register_id' => $regid,
+            'price' => $price,
+            'order_id' => $orderId,
+            'meta' => $extra_data,
+        ], $this->payment_meta_from_order($orderId));
+
         $response = $this->ws_post("{$this->portal_path}remote-pay-payment", [
-            'body' => ([
-                'register_id' => $regid,
-                'price' => $price,
-                'order_id' => $orderId,
-                'meta' => $extra_data
-            ]),
+            'body' => ($body),
             'headers' => $this->get_headers(),
         ]);
 
@@ -1013,13 +1048,15 @@ class PersonData {
      * Set exam payment remote
      */
     public function setExamPaymentRemote($examId, $price, $orderId) {
+        $body = array_merge([
+            'user_id' => $this->phone,
+            'exam_id' => $examId,
+            'price' => $price,
+            'order_id' => $orderId,
+        ], $this->payment_meta_from_order($orderId));
+
         $response = $this->ws_post("{$this->portal_path}remote-pay-exam", [
-            'body' => ([
-                'user_id' => $this->phone,
-                'exam_id' => $examId,
-                'price' => $price,
-                'order_id' => $orderId
-            ]),
+            'body' => ($body),
             'headers' => $this->get_headers(),
         ]);
 
