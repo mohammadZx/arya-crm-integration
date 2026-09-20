@@ -1152,6 +1152,13 @@ class PersonData {
 
         return json_decode(wp_remote_retrieve_body($response));
     }
+
+    public function getPurchaseStatus($orderId) {
+        $response = $this->ws_get($this->portal_path . 'remote-purchases/' . intval($orderId) . '?phone=' . rawurlencode($this->phone), [
+            'headers' => $this->get_headers(),
+        ]);
+        return json_decode(wp_remote_retrieve_body($response));
+    }
     
     /**
      * Force request

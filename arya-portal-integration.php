@@ -144,6 +144,7 @@ final class Arya_Portal_Integration {
         
         // Initialize Order Handler
         Arya\Portal\OrderHandler::instance();
+        new Arya\Portal\PurchaseFulfillment();
         
         // Initialize Redirect Helper
         Arya\Portal\RedirectHelper::instance();
@@ -190,4 +191,3 @@ function arya_portal_integration() {
 
 // Initialize plugin
 arya_portal_integration();
-

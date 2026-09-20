@@ -151,7 +151,7 @@ class OrderHandler {
         $quantity = 0;
         $is_online = false;
         
-        foreach ($order->get_items() as $item) {
+        foreach ($order->get_items() as $itemId => $item) {
             $productId = $item->get_product_id();
             $varId = $item->get_variation_id();
 
@@ -173,6 +173,7 @@ class OrderHandler {
                         (!get_post_meta($varId, 'has_presence', true) || get_post_meta($varId, 'has_presence', true) == 'no');
 
             $sendData['items'][] = [
+                'purchase_key' => 'woo-item-'.$itemId,
                 'course_id' => $courseId,
                 'course_code' => $courseCode,
                 'quantity' => $item->get_quantity(),
@@ -194,6 +195,8 @@ class OrderHandler {
         $sendData['shipping_price'] = $order->get_shipping_total();
         $sendData['discount_total'] = $order_fee_total;
         $sendData['order_id'] = $order_id;
+        // Woo status slug without wc- prefix (e.g. processing, completed)
+        $sendData['order_status'] = method_exists($order, 'get_status') ? (string) $order->get_status() : '';
         $sendData['transaction'] = $order->get_transaction_id();
         $sendData['course_code'] = $courseCode;
         $sendData['course_id'] = $courseId;
@@ -201,6 +204,50 @@ class OrderHandler {
         $sendData['quantity'] = $quantity;
         $sendData['is_online'] = $is_online;
         $sendData['gate_way'] = $order->get_payment_method();
+
+
+        // Prefer Woo shipping address; fall back to billing when shipping is empty.
+        $ship_address_1 = trim((string) $order->get_shipping_address_1());
+        $ship_address_2 = trim((string) $order->get_shipping_address_2());
+        $ship_city = trim((string) $order->get_shipping_city());
+        $ship_state = trim((string) $order->get_shipping_state());
+        $ship_postcode = trim((string) $order->get_shipping_postcode());
+        $ship_country = trim((string) $order->get_shipping_country());
+        $ship_first = trim((string) $order->get_shipping_first_name());
+        $ship_last = trim((string) $order->get_shipping_last_name());
+
+        if ($ship_address_1 === '' && $ship_city === '' && $ship_postcode === '') {
+            $ship_address_1 = trim((string) $order->get_billing_address_1());
+            $ship_address_2 = trim((string) $order->get_billing_address_2());
+            $ship_city = trim((string) $order->get_billing_city());
+            $ship_state = trim((string) $order->get_billing_state());
+            $ship_postcode = trim((string) $order->get_billing_postcode());
+            $ship_country = trim((string) $order->get_billing_country());
+            if ($ship_first === '') {
+                $ship_first = trim((string) $order->get_billing_first_name());
+            }
+            if ($ship_last === '') {
+                $ship_last = trim((string) $order->get_billing_last_name());
+            }
+        }
+
+        $address_parts = array_filter([$ship_address_1, $ship_address_2], static function ($p) {
+            return $p !== '';
+        });
+        $sendData['shipping'] = [
+            'address' => implode('، ', $address_parts),
+            'city' => $ship_city,
+            'state' => $ship_state,
+            'postcode' => $ship_postcode,
+            'country' => $ship_country,
+            'first_name' => $ship_first,
+            'last_name' => $ship_last,
+        ];
+        // Flat aliases for consumers that do not read nested shipping.
+        $sendData['shipping_address'] = $sendData['shipping']['address'];
+        $sendData['shipping_city'] = $ship_city;
+        $sendData['shipping_state'] = $ship_state;
+        $sendData['shipping_postcode'] = $ship_postcode;
 
         $order_notes = wc_get_order_notes(['order_id' => $order_id, 'limit' => 1]);
         if (!empty($order_notes)) {
@@ -220,12 +267,63 @@ class OrderHandler {
         }
 
         if ($get_info) {
+            $site_payloads = PurchasePayload::groups($order, $sendData);
+            // Legacy fallback: if no portal_category group matched, keep single sendData payload.
+            if (!$site_payloads) {
+                $site_payloads = [$sendData];
+            }
+            foreach ($site_payloads as &$site_payload) {
+                if (!isset($site_payload['shipping']) && isset($sendData['shipping'])) {
+                    $site_payload['shipping'] = $sendData['shipping'];
+                }
+                if (!isset($site_payload['shipping_address']) && isset($sendData['shipping_address'])) {
+                    $site_payload['shipping_address'] = $sendData['shipping_address'];
+                    $site_payload['shipping_city'] = $sendData['shipping_city'] ?? '';
+                    $site_payload['shipping_state'] = $sendData['shipping_state'] ?? '';
+                    $site_payload['shipping_postcode'] = $sendData['shipping_postcode'] ?? '';
+                }
+                if (!isset($site_payload['order_status']) && isset($sendData['order_status'])) {
+                    $site_payload['order_status'] = $sendData['order_status'];
+                }
+                if (!isset($site_payload['order_id']) && isset($sendData['order_id'])) {
+                    $site_payload['order_id'] = $sendData['order_id'];
+                }
+            }
+            unset($site_payload);
+            $sendData['site_payloads'] = $site_payloads;
             return $sendData;
         }
 
         // Force register to portal
         $personObject = new PersonData($buyer['phone']);
-        $personData = $personObject->forceRegister($sendData);
+        $payloads = PurchasePayload::groups($order, $sendData);
+        // Legacy fallback: empty groups must not skip CRM registration.
+        if (!$payloads) {
+            $payloads = [$sendData];
+        }
+        foreach ($payloads as $payload) {
+            if (!isset($payload['shipping']) && isset($sendData['shipping'])) {
+                $payload['shipping'] = $sendData['shipping'];
+            }
+            if (!isset($payload['shipping_address']) && isset($sendData['shipping_address'])) {
+                $payload['shipping_address'] = $sendData['shipping_address'];
+                $payload['shipping_city'] = $sendData['shipping_city'] ?? '';
+                $payload['shipping_state'] = $sendData['shipping_state'] ?? '';
+                $payload['shipping_postcode'] = $sendData['shipping_postcode'] ?? '';
+            }
+            if (!isset($payload['order_status']) && isset($sendData['order_status'])) {
+                $payload['order_status'] = $sendData['order_status'];
+            }
+            if (!isset($payload['order_id']) && isset($sendData['order_id'])) {
+                $payload['order_id'] = $sendData['order_id'];
+            }
+            $personData = $personObject->forceRegister($payload);
+            if (is_object($personData) && !empty($personData->purchase_register_id)) {
+                $order->update_meta_data('_arya_purchase_register_id', (int) $personData->purchase_register_id);
+                $order->update_meta_data('_arya_purchase_phone', $buyer['phone']);
+                $order->save();
+            }
+        }
         
         return;
     }
@@ -251,6 +349,7 @@ class OrderHandler {
         // Add marketing coupons
         foreach ($order->get_items('fee') as $item_id => $item_fee) {
             $fee_name = $item_fee->get_name();
+            if (strpos($fee_name, 'تخفیف کد معرف: ') !== 0) continue;
             $code = str_replace('تخفیف کد معرف: ', '', $fee_name);
             
             if (!$code) {
@@ -353,7 +452,9 @@ class OrderHandler {
 
         // Force register to portal (works for logged-in and guest buyers)
         $personObject = new PersonData($sendData['phone']);
-        $personData = $personObject->forceRequest($sendData);
+        foreach ($sendData['site_payloads'] ?? [$sendData] as $payload) {
+            unset($payload['site_payloads']);
+            $personObject->forceRequest($payload);
+        }
     }
 }
-
