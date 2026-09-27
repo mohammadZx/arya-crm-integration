@@ -109,6 +109,12 @@ class Logger {
     /** ارسال سفارش به CRM عمداً انجام نشد (دلیل در context.reason). */
     const ORDER_SEND_SKIPPED = 'ORDER_SEND_SKIPPED';
 
+    /** ارسال سفارش پرداخت‌شده به CRM شکست خورد؛ دوباره تلاش می‌شود. */
+    const ORDER_SEND_RETRY = 'ORDER_SEND_RETRY';
+
+    /** بعد از همه‌ی تلاش‌ها سفارش به CRM نرسید؛ باید دستی ثبت شود. */
+    const ORDER_SEND_FAILED = 'ORDER_SEND_FAILED';
+
     /** خودِ ارسال لاگ شکست خورد. هرگز فرستاده نمی‌شود؛ فقط محلی می‌ماند. */
     const LOG_SHIP_FAILED = 'LOG_SHIP_FAILED';
 
@@ -146,6 +152,8 @@ class Logger {
         self::JS_PROMISE_REJECTION => 'Promise رد شده در مرورگر کاربر',
         self::JS_REQUEST_FAILED   => 'درخواست AJAX در مرورگر کاربر شکست خورد',
         self::ORDER_SEND_SKIPPED  => 'ارسال سفارش به CRM انجام نشد',
+        self::ORDER_SEND_RETRY    => 'ارسال سفارش پرداخت‌شده به CRM شکست خورد؛ دوباره تلاش می‌شود',
+        self::ORDER_SEND_FAILED   => 'سفارش پرداخت‌شده بعد از همه‌ی تلاش‌ها به CRM نرسید',
         self::LOG_SHIP_FAILED     => 'ارسال لاگ‌ها به CRM شکست خورد',
     ];
 

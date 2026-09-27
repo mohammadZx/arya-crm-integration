@@ -116,6 +116,7 @@ final class Arya_Portal_Integration {
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Public_REST_API.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Admin.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Installment.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Backorder.php';
     }
     
     /**
@@ -135,6 +136,9 @@ final class Arya_Portal_Integration {
 
         // Initialize Installment
         Arya\Portal\Installment::instance();
+
+        // Sell without stock (pre-sale) limit from CRM
+        Arya\Portal\Backorder::instance();
         
         // Initialize REST API (Portal endpoints)
         Arya\Portal\REST_API::instance();
@@ -175,6 +179,10 @@ final class Arya_Portal_Integration {
         $timestamp = wp_next_scheduled('arya_portal_purge_logs');
         if ($timestamp) {
             wp_unschedule_event($timestamp, 'arya_portal_purge_logs');
+        }
+        $timestamp = wp_next_scheduled('arya_portal_retry_crm_orders');
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, 'arya_portal_retry_crm_orders');
         }
 
         // Flush rewrite rules

@@ -8,7 +8,18 @@ namespace Arya\Portal;
  * Handles order-related operations with portal
  */
 class OrderHandler {
-    
+
+    /** بسته‌هایی از سفارش که به CRM نرسیدند، برای تلاش دوباره. */
+    const RETRY_META = '_arya_crm_retry';
+
+    /** بسته‌هایی که بعد از همه‌ی تلاش‌ها هم نرسیدند (برای بررسی دستی). */
+    const FAILED_META = '_arya_crm_failed';
+
+    const RETRY_HOOK = 'arya_portal_retry_crm_orders';
+
+    /** هر ۵ دقیقه، تا حدود ۶ ساعت. */
+    const MAX_ATTEMPTS = 72;
+
     private static $instance = null;
     
     /**
@@ -36,6 +47,16 @@ class OrderHandler {
         add_action('woocommerce_checkout_order_processed', [$this, 'insert_order_request_on_portal'], 10, 1);
         add_action('woocommerce_thankyou', [$this, 'complete_info'], 4);
         add_action('woocommerce_checkout_create_order_line_item', [$this, 'installment_order'], 10, 4);
+
+        // سفارش پرداخت‌شده‌ای که ارسالش به CRM شکست خورد، دوباره فرستاده می‌شود؛
+        // وگرنه کالایش در CRM نه رزرو می‌شد نه از انبار کم
+        add_action(self::RETRY_HOOK, [$this, 'retry_failed_orders']);
+        if (!wp_next_scheduled(self::RETRY_HOOK)) {
+            wp_schedule_event(time() + 300, 'arya_portal_five_minutes', self::RETRY_HOOK);
+        }
+
+        // لغو/بازپرداخت در سایت به CRM خبر داده می‌شود تا رزرو کالا آزاد شود
+        add_action('woocommerce_order_status_changed', [$this, 'push_status_to_portal'], 20, 4);
     }
     
     /**
@@ -296,6 +317,7 @@ class OrderHandler {
 
         // Force register to portal
         $personObject = new PersonData($buyer['phone']);
+        $failed = [];
         $payloads = PurchasePayload::groups($order, $sendData);
         // Legacy fallback: empty groups must not skip CRM registration.
         if (!$payloads) {
@@ -317,15 +339,131 @@ class OrderHandler {
             if (!isset($payload['order_id']) && isset($sendData['order_id'])) {
                 $payload['order_id'] = $sendData['order_id'];
             }
-            $personData = $personObject->forceRegister($payload);
-            if (is_object($personData) && !empty($personData->purchase_register_id)) {
-                $order->update_meta_data('_arya_purchase_register_id', (int) $personData->purchase_register_id);
-                $order->update_meta_data('_arya_purchase_phone', $buyer['phone']);
-                $order->save();
+            if (!$this->register_purchase($order, $personObject, $payload, $buyer['phone'])) {
+                $failed[] = $payload;
             }
         }
-        
+
+        $this->remember_failed($order, $failed, $buyer['phone']);
+
         return;
+    }
+
+    /**
+     * یک بسته‌ی خرید (یک دسته) را در CRM ثبت می‌کند.
+     *
+     * CRM هر سفارش را برای هر دسته فقط یک‌بار ثبت می‌کند (site_order_imports)،
+     * پس فرستادن دوباره‌ی بسته‌ای که قبلاً رسیده ولی پاسخش گم شده بی‌خطر است.
+     *
+     * @return bool رسید؟
+     */
+    private function register_purchase($order, PersonData $person, array $payload, $phone) {
+        $response = $person->forceRegister($payload);
+        $ok = is_object($response) && !empty($response->id) && !isset($response->errors);
+        if (!$ok) {
+            return false;
+        }
+
+        if (!empty($response->purchase_register_id)) {
+            $order->update_meta_data('_arya_purchase_register_id', (int) $response->purchase_register_id);
+            $order->update_meta_data('_arya_purchase_phone', $phone);
+            $order->save();
+        }
+
+        return true;
+    }
+
+    /** بسته‌های نرسیده روی سفارش می‌مانند تا retry_failed_orders دوباره بفرستد. */
+    private function remember_failed($order, array $failed, $phone) {
+        if (!$failed) {
+            return;
+        }
+
+        $order->update_meta_data(self::RETRY_META, [
+            'payloads' => $failed,
+            'phone' => $phone,
+            'attempts' => 0,
+        ]);
+        $order->save();
+
+        Logger::instance()->warning(
+            Logger::ORDER_SEND_RETRY,
+            'ثبت سفارش پرداخت‌شده در CRM شکست خورد؛ هر ۵ دقیقه دوباره تلاش می‌شود.',
+            ['order_id' => $order->get_id(), 'payloads' => count($failed)],
+            Logger::SOURCE_PORTAL
+        );
+    }
+
+    /** اجرای زمان‌بندی‌شده: فرستادن دوباره‌ی بسته‌های نرسیده. */
+    public function retry_failed_orders() {
+        if (!function_exists('wc_get_orders')) {
+            return;
+        }
+
+        $orders = wc_get_orders([
+            'limit' => 20,
+            'type' => 'shop_order',
+            'status' => array_keys(wc_get_order_statuses()),
+            'meta_query' => [['key' => self::RETRY_META, 'compare' => 'EXISTS']],
+        ]);
+
+        foreach ($orders as $order) {
+            $retry = $order->get_meta(self::RETRY_META);
+            if (!is_array($retry) || empty($retry['payloads'])) {
+                $order->delete_meta_data(self::RETRY_META);
+                $order->save();
+                continue;
+            }
+
+            $person = new PersonData($retry['phone']);
+            $still = [];
+            foreach ($retry['payloads'] as $payload) {
+                if (!$this->register_purchase($order, $person, $payload, $retry['phone'])) {
+                    $still[] = $payload;
+                }
+            }
+
+            $attempts = (int) ($retry['attempts'] ?? 0) + 1;
+            $order = wc_get_order($order->get_id());
+
+            if (!$still) {
+                $order->delete_meta_data(self::RETRY_META);
+            } elseif ($attempts >= self::MAX_ATTEMPTS) {
+                $order->delete_meta_data(self::RETRY_META);
+                $order->update_meta_data(self::FAILED_META, $still);
+                Logger::instance()->error(
+                    Logger::ORDER_SEND_FAILED,
+                    'سفارش پرداخت‌شده بعد از همه‌ی تلاش‌ها در CRM ثبت نشد؛ آن را دستی ثبت کنید.',
+                    ['order_id' => $order->get_id(), 'attempts' => $attempts],
+                    Logger::SOURCE_PORTAL
+                );
+            } else {
+                $order->update_meta_data(self::RETRY_META, [
+                    'payloads' => $still,
+                    'phone' => $retry['phone'],
+                    'attempts' => $attempts,
+                ]);
+            }
+            $order->save();
+        }
+    }
+
+    /**
+     * وضعیت سفارشِ ثبت‌شده در CRM عوض شد؛ مثلاً لغو یا بازپرداخت در سایت.
+     * تغییری که خود CRM به سایت فرستاده هم برمی‌گردد و CRM آن را بی‌اثر رد می‌کند.
+     */
+    public function push_status_to_portal($order_id, $from, $to, $order = null) {
+        $order = $order ?: wc_get_order($order_id);
+        if (!$order) {
+            return;
+        }
+
+        $phone = $order->get_meta('_arya_purchase_phone');
+        if (!$phone || !$order->get_meta('_arya_purchase_register_id')) {
+            return;
+        }
+
+        (new PersonData($phone))->updatePurchaseStatus($order_id, $to);
     }
     
     /**

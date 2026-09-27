@@ -1145,9 +1145,25 @@ class PersonData {
      * Force register
      */
     public function forceRegister($registerData) {
+        // ثبت سفارش در CRM ممکن است بیش از ۵ ثانیه‌ی پیش‌فرض طول بکشد؛ CRM هر سفارش
+        // را یک‌بار ثبت می‌کند، پس تلاش دوباره بعد از تایم‌اوت فاکتور تکراری نمی‌سازد
         $response = $this->ws_post("{$this->portal_path}remote-force-register", [
             'headers' => $this->get_headers(),
-            'body' => ($registerData)
+            'body' => ($registerData),
+            'timeout' => 20,
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
+     * وضعیت سفارش در سایت عوض شد (لغو، بازپرداخت، …)؛ CRM رزرو کالای سفارش
+     * لغوشده را آزاد می‌کند. فیش و موجودی CRM دست نمی‌خورد.
+     */
+    public function updatePurchaseStatus($orderId, $status) {
+        $response = $this->ws_post($this->portal_path . 'remote-purchases/' . intval($orderId) . '/status', [
+            'headers' => $this->get_headers(),
+            'body' => ['phone' => $this->phone, 'status' => (string) $status],
         ]);
 
         return json_decode(wp_remote_retrieve_body($response));

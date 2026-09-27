@@ -595,9 +595,14 @@ class REST_API {
                     $variation->set_stock_status('instock');
                     $variation->set_virtual(true);
                 } else {
-                    $variation->set_stock_status($quantity > 0 ? 'instock' : 'outofstock');
+                    // فروش بدون موجودی (پیش‌فروش): CRM می‌گوید الان باز است یا نه؛
+                    // CRM قدیمی که این فیلد را نمی‌فرستد همان رفتار قبلی (no) را می‌گیرد
+                    $backorders = Backorder::from_payload($p);
                     $variation->set_manage_stock(true);
+                    $variation->set_backorders($backorders['open'] ? 'yes' : 'no');
+                    $variation->set_stock_status(Backorder::stock_status($quantity, $backorders['open']));
                     $variation->set_virtual(false);
+                    Backorder::store_limit($variation, $backorders['limit']);
                 }
                 
                 $variation->set_stock_quantity($quantity);

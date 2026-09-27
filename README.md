@@ -15,7 +15,7 @@
 - WordPress 5.0 یا بالاتر
 - WooCommerce 5.0 یا بالاتر
 - PHP 7.4 یا بالاتر
-
+ 
 ## نصب
 
 1. پوشه افزونه را در `wp-content/plugins/` قرار دهید
