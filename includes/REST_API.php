@@ -170,6 +170,11 @@ class REST_API {
      * walk a whole shop. Here we page over parent products and expand each
      * variable product into its variations, because the CRM stores every
      * variation as its own product row.
+     *
+     * CRM جدید دو پارامتر اختیاری می‌فرستد (CRM قدیمی همان خروجی قبلی را می‌گیرد):
+     *   with_parents  ردیف خود محصول متغیر (kind=parent) پیش از واریانت‌هایش، تا CRM
+     *                 محصول مادر بسازد و واریانت‌ها را فرزندش کند.
+     *   with_content  توضیحات، عکس شاخص و ویژگی‌ها (ProductCatalog).
      */
     public function list_products($request) {
         $page = max(1, (int) $request->get_param('page'));
@@ -177,6 +182,8 @@ class REST_API {
         $per_page = $per_page > 0 ? min($per_page, 100) : 25;
         $with_variations = $request->get_param('variations');
         $with_variations = $with_variations === null ? true : rest_sanitize_boolean($with_variations);
+        $with_parents = rest_sanitize_boolean($request->get_param('with_parents'));
+        $with_content = rest_sanitize_boolean($request->get_param('with_content'));
 
         $query = new \WP_Query([
             'post_type' => 'product',
@@ -202,8 +209,13 @@ class REST_API {
                 : [];
 
             if (empty($children)) {
-                $items[] = $this->crawl_item($product, null);
+                $items[] = $this->crawl_item($product, null, $with_content);
                 continue;
+            }
+
+            // مادر و واریانت‌هایش همیشه در یک صفحه‌اند (صفحه‌بندی روی مادرهاست)
+            if ($with_parents) {
+                $items[] = $this->crawl_item($product, null, $with_content, $children);
             }
 
             // یک محصول متغیر در CRM چند کالای مستقل می‌شود، پس والد ردیف ندارد.
@@ -212,7 +224,7 @@ class REST_API {
                 if (!$variation) {
                     continue;
                 }
-                $items[] = $this->crawl_item($variation, $product);
+                $items[] = $this->crawl_item($variation, $product, $with_content);
             }
         }
 
@@ -227,28 +239,35 @@ class REST_API {
     }
 
     /**
-     * One crawl row. `parent` is set only for variations.
+     * One crawl row. `parent` is set only for variations; `$variation_ids` only
+     * for the row of a variable product itself (kind=parent).
      */
-    private function crawl_item($product, $parent) {
+    private function crawl_item($product, $parent, $with_content = false, $variation_ids = null) {
         $id = $product->get_id();
         $name = $product->get_name();
+        $variation_values = ($parent && $with_content) ? ProductCatalog::variationAttributes($product, $parent) : null;
 
         if ($parent) {
             // نام واریانت به‌تنهایی «Parent - Attr» است یا اصلاً خالی؛
             // برچسب ویژگی‌ها را می‌چسبانیم تا در CRM کالای قابل‌تشخیص باشد.
-            $attributes = array_filter(array_values($product->get_variation_attributes()));
+            // با with_content نام مقدار (نه نامک URLشده‌ی ویژگی سراسری) می‌آید.
+            $attributes = $variation_values !== null
+                ? array_column($variation_values, 'option')
+                : array_filter(array_values($product->get_variation_attributes()));
             $suffix = $attributes ? ' - ' . implode(' / ', $attributes) : '';
             $name = $parent->get_name() . $suffix;
         }
 
         $stock = $product->get_stock_quantity();
+        $kind = $parent ? 'variation' : ($variation_ids !== null ? 'parent' : 'simple');
 
-        return [
+        $row = [
             'id' => $id,
             'parent_id' => $parent ? $parent->get_id() : 0,
             'name' => $name,
             'label' => $name,
             'type' => $parent ? 'variation' : $product->get_type(),
+            'kind' => $kind,
             'sku' => $product->get_sku(),
             'price' => $product->get_price(),
             'regular_price' => $product->get_regular_price(),
@@ -261,6 +280,18 @@ class REST_API {
             'course_id' => get_post_meta($id, 'course_id', true),
             'portal_category' => get_post_meta($parent ? $parent->get_id() : $id, 'portal_category', true),
         ];
+
+        if ($variation_ids !== null) {
+            $row['variation_ids'] = array_values(array_map('intval', $variation_ids));
+        }
+
+        if ($with_content) {
+            $row += ProductCatalog::content($product);
+            $row['image'] = ProductCatalog::image($product);
+            $row['attributes'] = $parent ? $variation_values : ProductCatalog::attributes($product);
+        }
+
+        return $row;
     }
 
     /**
