@@ -268,7 +268,9 @@ class REST_API {
             'label' => $name,
             'type' => $parent ? 'variation' : $product->get_type(),
             'kind' => $kind,
-            'sku' => $product->get_sku(),
+            // واریانتِ بی‌SKU در حالت نمایش SKU مادر را برمی‌گرداند و CRM همه‌ی
+            // واریانت‌ها را یک کالا (یا کالای بی‌ربطی با همان کد) می‌دید؛ فقط SKU خودش.
+            'sku' => $parent ? $product->get_sku('edit') : $product->get_sku(),
             'price' => $product->get_price(),
             'regular_price' => $product->get_regular_price(),
             'sale_price' => $product->get_sale_price(),

@@ -60,6 +60,33 @@ class OrderHandler {
     }
     
     /**
+     * سفارش فقط مدرک، وجه پرداختی یا آزمون است.
+     *
+     * این‌ها در CRM از payPayment / payExam می‌روند و category_id نمی‌خواهند.
+     * محصول وجه و مدرک اسلاگ pay-payment است؛ آزمون اسلاگ exam.
+     *
+     * @param \WC_Order $order
+     */
+    private function is_direct_remote_payment_order($order) {
+        $items = $order->get_items();
+        if (!$items) {
+            return false;
+        }
+
+        foreach ($items as $item) {
+            $product_id = (int) $item->get_product_id();
+            $slug = function_exists('get_post_field')
+                ? (string) get_post_field('post_name', $product_id)
+                : '';
+            if (!in_array($slug, ['pay-payment', 'exam'], true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Resolve buyer phone/name from WP user or WooCommerce billing fields (guest checkout).
      *
      * @param \WC_Order $order
@@ -141,6 +168,12 @@ class OrderHandler {
                 [],
                 $stage
             );
+            return;
+        }
+
+        // مدرک، وجه پرداختی و آزمون با remote-pay-payment / remote-pay-exam ثبت می‌شوند.
+        // ForceRegisterController برای این‌ها category_id و portal_category نمی‌خواهد.
+        if ($this->is_direct_remote_payment_order($order)) {
             return;
         }
 
@@ -408,6 +441,12 @@ class OrderHandler {
         ]);
 
         foreach ($orders as $order) {
+            if ($this->is_direct_remote_payment_order($order)) {
+                $order->delete_meta_data(self::RETRY_META);
+                $order->save();
+                continue;
+            }
+
             $retry = $order->get_meta(self::RETRY_META);
             if (!is_array($retry) || empty($retry['payloads'])) {
                 $order->delete_meta_data(self::RETRY_META);

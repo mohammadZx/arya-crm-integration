@@ -47,6 +47,13 @@
 - `POST /wp-json/portal/order` - افزودن سفارش
 - `POST /wp-json/portal/course-headline` - افزودن سرفصل‌ها
 - `GET /wp-json/portal/search` - جستجوی محصول
+- `GET /wp-json/portal/products` - فهرست صفحه‌بندی‌شده‌ی کاتالوگ برای ایمپورت CRM
+  - `with_parents=1`: ردیف خود محصول متغیر (`kind=parent` با `variation_ids`) پیش از واریانت‌هایش
+  - `with_content=1`: `description`، `short_description`، `image` (عکس خود محصول/واریانت) و `attributes`
+    (مادر/ساده: `options` و پرچم‌های `visible`/`variation`؛ واریانت: `option`)؛ ویژگی سراسری با نام مقدار، نه نامک
+  - بدون این دو پارامتر خروجی همان نسخه‌ی قبلی است (سازگاری با CRM قدیمی)
+  - `sku` واریانت (با هر پارامتری) فقط SKU خود آن است و اگر ندارد خالی؛ SKU ارثی مادر فرستاده
+    نمی‌شود، چون CRM همه‌ی واریانت‌ها را یک کالا (یا کالای بی‌ربطی با همان کد) می‌دید
 - `POST /wp-json/portal/sync-product` - همگام‌سازی محصول
 
 ## استفاده
@@ -79,6 +86,7 @@ arya-portal-integration/
 │   ├── Settings.php             # مدیریت تنظیمات
 │   ├── REST_API.php             # REST API endpoints
 │   ├── OrderHandler.php         # مدیریت سفارشات
+│   ├── ProductCatalog.php       # توضیحات، عکس و ویژگی‌ها برای ایمپورت CRM
 │   └── helpers/
 │       └── VariationHelper.php  # Helper برای واریانت‌ها
 └── README.md
