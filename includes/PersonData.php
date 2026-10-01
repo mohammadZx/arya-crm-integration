@@ -930,7 +930,7 @@ class PersonData {
     /**
      * Get exams
      */
-    public function get_exams($userId = null, $categories = null) {
+    public function get_exams($userId = null, $categories = null, $args = []) {
         $url = "{$this->portal_path}exam";
         $params = [];
         
@@ -939,6 +939,15 @@ class PersonData {
         }
         if ($categories) {
             $params['categories'] = $categories;
+        }
+        if (!empty($args['page'])) {
+            $params['page'] = max(1, (int) $args['page']);
+        }
+        if (!empty($args['per_page'])) {
+            $params['per_page'] = max(1, (int) $args['per_page']);
+        }
+        if (isset($args['search']) && $args['search'] !== '') {
+            $params['search'] = $args['search'];
         }
         
         if ($params) {
