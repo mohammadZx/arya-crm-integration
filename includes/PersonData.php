@@ -1103,6 +1103,7 @@ class PersonData {
             'body' => ([
                 'phone' => $data['phone'],
                 'course_code' => $data['course_code'],
+                'register_id' => $data['register_id'] ?? null,
             ])
         ]);
 
