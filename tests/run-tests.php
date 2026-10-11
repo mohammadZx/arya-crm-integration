@@ -212,7 +212,18 @@ $person = new PersonData('');
 same(null, $person->getPersonAlert(), 'بدون شماره، درخواستی زده نمی‌شود');
 same([Logger::ALERT_NO_PHONE], codes_logged(), 'نبودِ شماره کد ALERT_NO_PHONE می‌گیرد');
 
-echo "\n\033[1mgetPersonDataForm: کدام پارامتر نبود\033[0m\n";
+reset_logs();
+arya_queue_response(200, '{"status":true,"data":{"rollcall_id":44}}');
+$person = new PersonData('09120000000');
+$result = $person->saveAbsenceReason(12, 44, 'illness', 'تب داشتم');
+$request = end($GLOBALS['arya_http_log']);
+same(true, $result->status, 'ثبت علت غیبت پاسخ API را حفظ می‌کند');
+same('POST', $request['method'], 'ثبت علت غیبت با POST ارسال می‌شود');
+same('https://crm.test/api/v1/person/09120000000/register/12/rollcall/44/absence-reason', $request['url'], 'مسیر ثبت علت به شخص و ثبت‌نام محدود است');
+same('illness', $request['args']['body']['absence_reason'], 'علت غیبت در body ارسال می‌شود');
+same('تب داشتم', $request['args']['body']['comments'], 'توضیحات غیبت در body ارسال می‌شود');
+same(1, $request['args']['headers']['from_site'], 'هدر اتصال سایت روی درخواست ثبت علت وجود دارد');
+
 
 reset_logs();
 arya_queue_response(200, json_encode([

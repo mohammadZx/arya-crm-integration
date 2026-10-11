@@ -694,6 +694,21 @@ class PersonData {
     }
     
     /**
+     * Save an absence reason entered by the authenticated trainee on the website.
+     */
+    public function saveAbsenceReason($regid, $rollcallId, $reason, $comments = '') {
+        $response = $this->ws_post("{$this->portal_path}person/{$this->phone}/register/" . (int) $regid . "/rollcall/" . (int) $rollcallId . "/absence-reason", [
+            'headers' => $this->get_headers(),
+            'body' => [
+                'absence_reason' => (string) $reason,
+                'comments' => (string) $comments,
+            ],
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
      * Get person register by ID
      */
     public function getPersonRegisterById($regid) {
