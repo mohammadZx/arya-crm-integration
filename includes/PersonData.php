@@ -951,6 +951,223 @@ class PersonData {
         ];
     }
 
+    /* ===============================================================
+     |  استان و شهر برای انتخاب‌گرهای فرم تکمیل اطلاعات
+     |
+     |  CRM دیگر فهرست کامل (۳۱ استان و ~۱۴۰۰ شهر) را همراه فرم نمی‌فرستد؛
+     |  انتخاب‌گرها با جستجو پر می‌شوند (geo/states و geo/cities). پاسخ موفق
+     |  ۱۲ ساعت در transient می‌ماند — جغرافیا به‌ندرت عوض می‌شود — تا تایپ و
+     |  باز کردنِ دوبارهٔ انتخاب‌گر هر بار به CRM نرسد. شکست کش نمی‌شود؛
+     |  خروجی در شکست [] است و علتش از getLastError() خوانده می‌شود.
+     ===============================================================*/
+
+    /** عمر کش جستجوی استان/شهر: ۱۲ ساعت. */
+    const GEO_CACHE_TTL = 43200;
+
+    /** بلندترین متن جستجو؛ هیچ نام استان یا شهری از این بلندتر نیست. */
+    const GEO_SEARCH_MAX = 50;
+
+    /**
+     * استان‌ها: با متن جستجو (خالی = استان‌های اول) یا با کد (برچسب مقدار ذخیره‌شده).
+     *
+     * @param string          $search
+     * @param string[]|string $codes  آرایه یا «THR,ESF»؛ اگر باشد، جستجو نادیده گرفته می‌شود.
+     * @return array<int, array{code: string, name: string}>
+     */
+    public function getGeoStates($search = '', $codes = []) {
+        $this->clearLastError();
+
+        $codes = $this->geoStateCodes($codes);
+        $params = [];
+        if ($codes) {
+            $params['codes'] = implode(',', $codes);
+        } else {
+            $search = $this->geoSearchTerm($search);
+            if ($search !== '') {
+                $params['search'] = $search;
+            }
+        }
+        $params['limit'] = 50;
+
+        $url = $this->portal_path . 'geo/states?' . http_build_query($params);
+        $cached = $this->geoCached($url);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $response = $this->ws_get($url, [
+            'timeout' => 10,
+            'headers' => $this->get_headers(),
+        ]);
+        $rows = $this->geoRows($response, 'getGeoStates', $url);
+        if ($rows === null) {
+            return [];
+        }
+
+        $states = [];
+        foreach ($rows as $row) {
+            $code = $this->geoStateCode(is_array($row) ? ($row['code'] ?? '') : '');
+            $name = is_array($row) && isset($row['name']) && is_scalar($row['name']) ? trim((string) $row['name']) : '';
+            if ($code !== '' && $name !== '') {
+                $states[] = ['code' => $code, 'name' => $name];
+            }
+        }
+
+        set_transient($this->geoCacheKey($url), $states, self::GEO_CACHE_TTL);
+        return $states;
+    }
+
+    /**
+     * شهرهای یک استان با متن جستجو (خالی = ۳۰ شهر اول)، یا شهرها با شناسه.
+     *
+     * @param string|null     $state  کد استان (THR)؛ وقتی $ids هست لازم نیست.
+     * @param string          $search
+     * @param int[]|string    $ids    آرایه یا «1277,1279».
+     * @return array<int, array{id: int, name: string, state: string}>
+     */
+    public function getGeoCities($state, $search = '', $ids = []) {
+        $this->clearLastError();
+
+        $ids = $this->geoIds($ids);
+        if ($ids) {
+            $params = ['ids' => implode(',', $ids)];
+            if (count($ids) > 30) {
+                $params['limit'] = count($ids);
+            }
+        } else {
+            $state = $this->geoStateCode($state);
+            if ($state === '') {
+                // CRM هم بدون استان شهری برنمی‌گرداند؛ درخواستش هدر است.
+                return [];
+            }
+            $params = ['state' => $state];
+            $search = $this->geoSearchTerm($search);
+            if ($search !== '') {
+                $params['search'] = $search;
+            }
+            $params['limit'] = 30;
+        }
+
+        $url = $this->portal_path . 'geo/cities?' . http_build_query($params);
+        $cached = $this->geoCached($url);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $response = $this->ws_get($url, [
+            'timeout' => 10,
+            'headers' => $this->get_headers(),
+        ]);
+        $rows = $this->geoRows($response, 'getGeoCities', $url);
+        if ($rows === null) {
+            return [];
+        }
+
+        $cities = [];
+        foreach ($rows as $row) {
+            $id = is_array($row) && isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0;
+            $name = is_array($row) && isset($row['name']) && is_scalar($row['name']) ? trim((string) $row['name']) : '';
+            if ($id > 0 && $name !== '') {
+                $cities[] = ['id' => $id, 'name' => $name, 'state' => $this->geoStateCode($row['state'] ?? '')];
+            }
+        }
+
+        set_transient($this->geoCacheKey($url), $cities, self::GEO_CACHE_TTL);
+        return $cities;
+    }
+
+    /**
+     * ردیف‌های data پاسخ geo؛ null یعنی شکست (ws_get علت شبکه/وضعیت/JSON را ثبت کرده).
+     */
+    private function geoRows($response, $operation, $url) {
+        if (is_wp_error($response)) {
+            return null;
+        }
+        $status = (int) wp_remote_retrieve_response_code($response);
+        if ($status < 200 || $status >= 300) {
+            return null;
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        if (!is_array($body) || !isset($body['data']) || !is_array($body['data'])) {
+            // بدنهٔ خالی یا غیرJSON را ws_request ثبت کرده؛ فقط «JSON بود ولی data نداشت» مانده.
+            if ($this->last_error === null) {
+                $this->record_error(
+                    Logger::WS_MISSING_FIELD,
+                    'پاسخ جستجوی استان/شهر کلید data نداشت.',
+                    [
+                        'operation' => $operation,
+                        'endpoint'  => $this->relative_endpoint($url),
+                        'missing'   => ['data'],
+                        'received'  => $this->payload_keys($body),
+                    ]
+                );
+            }
+            return null;
+        }
+
+        return $body['data'];
+    }
+
+    /** کلید transient؛ آدرس کامل (با دامنهٔ CRM) در آن است تا عوض‌کردن پورتال، کش قدیمی را نخواند. */
+    private function geoCacheKey($url) {
+        return 'arya_geo_' . md5($url);
+    }
+
+    /** @return array|null */
+    private function geoCached($url) {
+        $cached = get_transient($this->geoCacheKey($url));
+        return is_array($cached) ? $cached : null;
+    }
+
+    /**
+     * متن جستجو به یک شکل: «ي/ك» عربی همان «ی/ک» است (CRM هم یکی می‌کند) و
+     * فاصله‌های اضافه حذف می‌شوند، تا «كرمان» و «کرمان » یک کلید کش داشته باشند.
+     */
+    private function geoSearchTerm($search) {
+        if (!is_scalar($search)) {
+            return '';
+        }
+        $search = str_replace(['ي', 'ك'], ['ی', 'ک'], (string) $search);
+        $search = trim(preg_replace('/\s+/u', ' ', $search) ?? '');
+
+        return trim(mb_substr($search, 0, self::GEO_SEARCH_MAX));
+    }
+
+    /** کد استان (THR، XKISH2، …): فقط حروف لاتین، رقم، - و _. */
+    private function geoStateCode($code) {
+        if (!is_scalar($code)) {
+            return '';
+        }
+        return substr(strtoupper(preg_replace('/[^A-Za-z0-9_-]/', '', (string) $code)), 0, 20);
+    }
+
+    /** @return string[] کدهای یکتا و مرتب (کلید کش به ترتیب ورودی وابسته نیست). */
+    private function geoStateCodes($codes) {
+        $codes = is_array($codes) ? $codes : explode(',', (string) $codes);
+        $codes = array_map(function ($code) {
+            return $this->geoStateCode($code);
+        }, $codes);
+        $codes = array_values(array_unique(array_filter($codes, 'strlen')));
+        sort($codes);
+
+        return array_slice($codes, 0, 50);
+    }
+
+    /** @return int[] شناسه‌های یکتا و مرتب. */
+    private function geoIds($ids) {
+        $ids = is_array($ids) ? $ids : explode(',', (string) $ids);
+        $clean = [];
+        foreach ($ids as $id) {
+            if (is_numeric($id) && (int) $id > 0) {
+                $clean[(int) $id] = (int) $id;
+            }
+        }
+        ksort($clean);
+
+        return array_slice(array_values($clean), 0, 100);
+    }
+
     /**
      * Get exams
      */

@@ -292,26 +292,134 @@ same(null, $person->getLastError(), 'مسیر موفق last_error را پاک م
 reset_logs();
 arya_queue_response(200, json_encode([
     'person' => ['data' => ['id' => 1]],
-    'personData' => ['data' => [['meta_key' => 'province', 'meta_value' => 'THR'], ['meta_key' => 'city_id', 'meta_value' => '1277']]],
-    'dependency' => [
-        'places' => [['id' => 11, 'option_value' => 'تهران']],
-        'geo_states' => [['id' => 'THR', 'option_value' => 'تهران', 'label' => 'تهران']],
-        'geo_cities' => [['id' => 1277, 'option_value' => 'تهران', 'state' => 'THR']],
-    ],
+    'personData' => ['data' => [
+        ['meta_key' => 'province', 'meta_value' => 'THR', 'label' => 'تهران', 'option' => null],
+        ['meta_key' => 'city_id', 'meta_value' => '1277', 'label' => 'تهران', 'option' => null],
+    ]],
+    // قرارداد تازه: فهرست کامل استان/شهر/places دیگر همراه فرم نیست.
+    'dependency' => ['jobs' => []],
     'schema' => ['fields' => [
-        ['key' => 'province', 'options_source' => 'window:geo_states', 'depends_clear' => ['city_id', 'region']],
-        ['key' => 'city_id', 'options_source' => 'window:geo_cities', 'options_parent' => 'province'],
+        ['key' => 'province', 'type' => 'vue-select', 'geo' => 'state', 'depends_clear' => ['city_id', 'region']],
+        ['key' => 'city_id', 'type' => 'vue-select', 'geo' => 'city', 'options_parent' => 'province'],
+        ['key' => 'birth_place', 'type' => 'text'],
     ]],
     'translations' => [],
     'fieldReviews' => [],
 ]));
 $person = new PersonData('09120000000');
 $form = $person->getPersonDataForm();
-same(true, $form['success'], 'فرم با فهرست استان و شهر باز می‌شود');
-same('THR', $form['dependency']->geo_states[0]->id, 'استان‌ها با کد به فرم می‌رسند (هیچ کلیدی از dependency حذف نمی‌شود)');
-same('THR', $form['dependency']->geo_cities[0]->state, 'هر شهر کد استانش را تا فرم نگه می‌دارد');
-same(11, $form['dependency']->places[0]->id, 'فهرست قدیمی places هم کنار آن‌ها می‌ماند');
+same(true, $form['success'], 'فرم بدون فهرست استان و شهر باز می‌شود');
+same([], codes_logged(), 'نبودِ places/geo_states/geo_cities خطا یا هشدار نیست');
+same('تهران', $form['personData']->data[0]->label, 'نام استان (label) همراه مقدار ذخیره‌شده به فرم می‌رسد');
+same('THR', $form['personData']->data[0]->meta_value, 'مقدار استان همان کد می‌ماند');
+same('1277', $form['personData']->data[1]->meta_value, 'مقدار شهر همان شناسه می‌ماند');
+same('state', $form['schema']['fields'][0]['geo'], 'geo در اسکیما دست‌نخورده می‌ماند');
 same('province', $form['schema']['fields'][1]['options_parent'], 'options_parent در اسکیما دست‌نخورده می‌ماند');
+
+echo "\n\033[1mجستجوی استان و شهر (geo) با کش\033[0m\n";
+
+/** آدرس و پارامترهای آخرین درخواست HTTP. */
+function last_request_parts() {
+    $request = end($GLOBALS['arya_http_log']);
+    parse_str((string) parse_url($request['url'], PHP_URL_QUERY), $query);
+    return [strtok($request['url'], '?'), $query, $request];
+}
+function http_count() { return count($GLOBALS['arya_http_log']); }
+
+reset_logs();
+$GLOBALS['arya_transients'] = [];
+arya_queue_response(200, json_encode(['country' => 'IR', 'data' => [
+    ['code' => 'THR', 'name' => 'تهران'],
+    ['code' => 'ESF', 'name' => 'اصفهان'],
+    ['code' => '', 'name' => 'بدون کد'],
+    'خراب',
+]]));
+$person = new PersonData('09120000000');
+$states = $person->getGeoStates('  تهـ ');
+same([['code' => 'THR', 'name' => 'تهران'], ['code' => 'ESF', 'name' => 'اصفهان']], $states, 'getGeoStates آرایهٔ ساده برمی‌گرداند و ردیف‌های ناقص را کنار می‌گذارد');
+[$path, $query, $request] = last_request_parts();
+same('https://crm.test/api/v1/geo/states', $path, 'مسیر geo/states');
+same(['search' => 'تهـ', 'limit' => '50'], $query, 'search (بدون فاصلهٔ اضافه) و limit=50');
+same('GET', $request['method'], 'با GET');
+same('Bearer test-token', $request['args']['headers']['Authorization'], 'با توکن پورتال');
+same(1, $request['args']['headers']['from_site'], 'با هدر from_site');
+same(1, count(array_filter(array_keys($GLOBALS['arya_transients']), fn ($k) => strpos($k, 'arya_geo_') === 0)), 'پاسخ موفق در transient با پیشوند arya_geo_ ذخیره می‌شود');
+
+$before = http_count();
+same($states, $person->getGeoStates('تهـ'), 'تکرار همان جستجو همان نتیجه را می‌دهد');
+same($before, http_count(), 'تکرار همان جستجو از کش می‌آید (درخواست HTTP نمی‌زند)');
+same(null, $person->getLastError(), 'پاسخ کش‌شده خطای قبلی را نشان نمی‌دهد');
+
+arya_queue_response(200, json_encode(['data' => [['code' => 'KRN', 'name' => 'کرمان']]]));
+$person->getGeoStates('كرمان');
+$before = http_count();
+same([['code' => 'KRN', 'name' => 'کرمان']], $person->getGeoStates('کرمان'), '«ك» عربی و «ک» فارسی یک کلید کش دارند');
+same($before, http_count(), '«كرمان» و «کرمان» فقط یک درخواست می‌زنند');
+same('کرمان', last_request_parts()[1]['search'], 'متن جستجو با «ک» فارسی به CRM می‌رود');
+
+arya_queue_response(200, json_encode(['data' => [['code' => 'ESF', 'name' => 'اصفهان'], ['code' => 'THR', 'name' => 'تهران']]]));
+$person->getGeoStates('نادیده', ['thr', 'ESF', 'THR', 'x"y']);
+same(['codes' => 'ESF,THR,XY', 'limit' => '50'], last_request_parts()[1], 'codes یکتا، مرتب و با حروف بزرگ؛ جستجو کنارش نادیده گرفته می‌شود');
+
+reset_logs();
+arya_queue_response(500, '{"message":"boom"}');
+$person = new PersonData('09120000000');
+same([], $person->getGeoStates('خطا'), 'شکست => آرایهٔ خالی');
+same(Logger::WS_HTTP_STATUS, $person->getLastError()['code'] ?? null, 'علت شکست از getLastError خوانده می‌شود');
+same([Logger::WS_HTTP_STATUS], codes_logged(), 'شکست با همان لایهٔ ws_get لاگ می‌شود');
+arya_queue_response(200, json_encode(['data' => [['code' => 'THR', 'name' => 'تهران']]]));
+$before = http_count();
+same([['code' => 'THR', 'name' => 'تهران']], $person->getGeoStates('خطا'), 'شکست کش نمی‌شود: درخواست بعدی دوباره به CRM می‌رود');
+same($before + 1, http_count(), 'بعد از شکست، درخواست تازه زده می‌شود');
+
+reset_logs();
+arya_queue_error('cURL error 28: Operation timed out');
+same([], $person->getGeoStates('قطع'), 'قطع شبکه => آرایهٔ خالی');
+same([Logger::WS_REQUEST_FAILED], codes_logged(), 'قطع شبکه کد WS_REQUEST_FAILED می‌گیرد');
+
+reset_logs();
+arya_queue_response(200, '{"unexpected":1}');
+same([], $person->getGeoStates('بی‌داده'), 'پاسخ بدون data => آرایهٔ خالی');
+same([Logger::WS_MISSING_FIELD], codes_logged(), 'نبودِ data کد WS_MISSING_FIELD می‌گیرد');
+same(['data'], today_entries()[0]['context']['missing'], 'لاگ می‌گوید data نبود');
+$before = http_count();
+arya_queue_response(200, json_encode(['data' => []]));
+same([], $person->getGeoStates('بی‌داده'), 'پاسخ بی‌data هم کش نشده بود');
+same($before + 1, http_count(), 'پاسخ ناقص کش نمی‌شود');
+same(null, $person->getLastError(), 'جستجوی بی‌نتیجه شکست نیست');
+
+reset_logs();
+$GLOBALS['arya_transients'] = [];
+arya_queue_response(200, json_encode(['data' => [
+    ['id' => 1277, 'name' => 'تهران', 'state' => 'THR'],
+    ['id' => '1279', 'name' => 'ری', 'state' => 'THR'],
+    ['id' => 0, 'name' => 'بی‌شناسه', 'state' => 'THR'],
+]]));
+$person = new PersonData('09120000000');
+$cities = $person->getGeoCities('thr', 'ر');
+same([['id' => 1277, 'name' => 'تهران', 'state' => 'THR'], ['id' => 1279, 'name' => 'ری', 'state' => 'THR']], $cities, 'getGeoCities آرایهٔ ساده با شناسهٔ عددی برمی‌گرداند');
+[$path, $query] = last_request_parts();
+same('https://crm.test/api/v1/geo/cities', $path, 'مسیر geo/cities');
+same(['state' => 'THR', 'search' => 'ر', 'limit' => '30'], $query, 'state + search + limit=30');
+$before = http_count();
+same($cities, $person->getGeoCities('THR', 'ر'), 'جستجوی تکراری شهر از کش می‌آید');
+same($before, http_count(), 'جستجوی تکراری شهر درخواست HTTP نمی‌زند');
+
+arya_queue_response(200, json_encode(['data' => [['id' => 1, 'name' => 'الف', 'state' => 'ESF']]]));
+$person->getGeoCities('ESF', 'ر');
+same('ESF', last_request_parts()[1]['state'], 'همان متن در استان دیگر کلید کش جدا دارد');
+
+arya_queue_response(200, json_encode(['data' => [['id' => 1277, 'name' => 'تهران', 'state' => 'THR'], ['id' => 1279, 'name' => 'ری', 'state' => 'THR']]]));
+$person->getGeoCities(null, 'نادیده', [1279, '1277', 'x', 1277, -3]);
+same(['ids' => '1277,1279'], last_request_parts()[1], 'ids یکتا و مرتب؛ بدون state و search');
+
+$before = http_count();
+same([], $person->getGeoCities('', 'تهر'), 'شهر بدون استان => آرایهٔ خالی');
+same([], $person->getGeoCities('"/<>', ''), 'کد استان نامعتبر => آرایهٔ خالی');
+same($before, http_count(), 'شهر بدون استان به CRM درخواست نمی‌زند');
+
+$person->getGeoCities('THR', str_repeat('ب', 300));
+same(PersonData::GEO_SEARCH_MAX, mb_strlen(last_request_parts()[1]['search']), 'متن جستجو به ' . PersonData::GEO_SEARCH_MAX . ' نویسه محدود است');
 
 reset_logs();
 arya_queue_response(200, json_encode([
