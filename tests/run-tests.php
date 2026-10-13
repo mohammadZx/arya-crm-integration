@@ -180,6 +180,23 @@ same([], codes_logged(), '۴۰۴ مدل User روی person/* به‌عنوان �
 same(null, $person->getLastError(), '۴۰۴ کاربر ناموجود last_error هم نمی‌سازد');
 
 reset_logs();
+arya_queue_response(404, '{"message":"مورد درخواستی پیدا نشد یا حذف شده است."}');
+$person = new PersonData('09120000000');
+same(null, $person->getPersonByPhone('09120000000'), '۴۰۴ ترجمه‌شدهٔ CRM => شخص نیست (null)، نه بدنهٔ خطا');
+same([], codes_logged(), '۴۰۴ ترجمه‌شده روی person/{id} به‌عنوان خطا ثبت نمی‌شود');
+
+reset_logs();
+arya_queue_response(200, '{"data":{"id":12,"phone":"09120000000"}}');
+$person = new PersonData('09120000000');
+same(12, $person->getPersonByPhone('09120000000')->data->id, 'شخص پیداشده همان پاسخ CRM است');
+
+reset_logs();
+arya_queue_response(404, '{"message":"مورد درخواستی پیدا نشد یا حذف شده است."}');
+$person = new PersonData('09120000000');
+$person->getPersonBonuses();
+same([Logger::WS_HTTP_STATUS], codes_logged(), '۴۰۴ ترجمه‌شده روی زیرمسیر person همچنان خطا است');
+
+reset_logs();
 arya_queue_response(404, '{"message":"No query results for model [App\\\\Models\\\\Bonus]."}');
 $person = new PersonData('09120000000');
 $person->getPersonBonuses();
@@ -271,6 +288,30 @@ $form = $person->getPersonDataForm();
 same(true, $form['success'], 'پاسخ کامل => success=true');
 same([], codes_logged(), 'مسیر موفق هیچ خطایی لاگ نمی‌کند');
 same(null, $person->getLastError(), 'مسیر موفق last_error را پاک می‌کند');
+
+reset_logs();
+arya_queue_response(200, json_encode([
+    'person' => ['data' => ['id' => 1]],
+    'personData' => ['data' => [['meta_key' => 'province', 'meta_value' => 'THR'], ['meta_key' => 'city_id', 'meta_value' => '1277']]],
+    'dependency' => [
+        'places' => [['id' => 11, 'option_value' => 'تهران']],
+        'geo_states' => [['id' => 'THR', 'option_value' => 'تهران', 'label' => 'تهران']],
+        'geo_cities' => [['id' => 1277, 'option_value' => 'تهران', 'state' => 'THR']],
+    ],
+    'schema' => ['fields' => [
+        ['key' => 'province', 'options_source' => 'window:geo_states', 'depends_clear' => ['city_id', 'region']],
+        ['key' => 'city_id', 'options_source' => 'window:geo_cities', 'options_parent' => 'province'],
+    ]],
+    'translations' => [],
+    'fieldReviews' => [],
+]));
+$person = new PersonData('09120000000');
+$form = $person->getPersonDataForm();
+same(true, $form['success'], 'فرم با فهرست استان و شهر باز می‌شود');
+same('THR', $form['dependency']->geo_states[0]->id, 'استان‌ها با کد به فرم می‌رسند (هیچ کلیدی از dependency حذف نمی‌شود)');
+same('THR', $form['dependency']->geo_cities[0]->state, 'هر شهر کد استانش را تا فرم نگه می‌دارد');
+same(11, $form['dependency']->places[0]->id, 'فهرست قدیمی places هم کنار آن‌ها می‌ماند');
+same('province', $form['schema']['fields'][1]['options_parent'], 'options_parent در اسکیما دست‌نخورده می‌ماند');
 
 reset_logs();
 arya_queue_response(200, json_encode([

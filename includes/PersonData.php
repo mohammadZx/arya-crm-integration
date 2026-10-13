@@ -328,11 +328,17 @@ class PersonData {
         }
 
         $body = (string) $body;
-        if (strpos($body, 'No query results for model') === false) {
-            return false;
+        if (strpos($body, 'No query results for model') !== false) {
+            return stripos($body, 'User') !== false;
         }
 
-        return stripos($body, 'User') !== false;
+        // CRM پیام ۴۰۴ را ترجمه‌شده و بی‌نام مدل برمی‌گرداند ({"message": "..."})؛ فقط برای
+        // خودِ person/{id} یعنی «شخص نیست» — زیرمسیرها (bonuses، …) همچنان خطا هستند
+        if (!preg_match('~^(?:person|has-register)/[^/?#]+/?(?:[?#].*)?$~', (string) $endpoint)) {
+            return false;
+        }
+        $decoded = json_decode($body);
+        return is_object($decoded) && isset($decoded->message) && !isset($decoded->data);
     }
 
     /** پاسخ ساختگی هم‌شکل خروجی wp_remote_* برای ردِ بی‌صدا بدون درخواست شبکه. */
@@ -376,7 +382,10 @@ class PersonData {
             'headers' => $this->get_headers(),
         ]);
 
-        return json_decode(wp_remote_retrieve_body($response));
+        // ۴۰۴ هم بدنهٔ JSON (پیام خطا) دارد؛ فقط پاسخی که خودِ شخص را دارد «پیدا شد» است.
+        // بدون این، کاربر تازهٔ سایت هرگز در CRM ساخته نمی‌شد (after_arya_auth).
+        $person = json_decode(wp_remote_retrieve_body($response));
+        return (is_object($person) && isset($person->data) && is_object($person->data) && !empty($person->data->id)) ? $person : null;
     }
     
     /**

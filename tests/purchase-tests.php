@@ -27,8 +27,9 @@ class PurchaseTestOrder {
     public $shipping = [];
     public function get_items($type = 'line_item') { return $type === 'fee' ? $this->fees : ($type === 'shipping' ? $this->shipping : $this->items); }
     public function get_id() { return 100; }
+    public $meta = ['_arya_purchase_phone' => '09120000000', '_arya_purchase_register_id' => 17];
     public function get_customer_id() { return 7; }
-    public function get_meta($key) { return $key === '_arya_purchase_phone' ? '09120000000' : 17; }
+    public function get_meta($key) { return $this->meta[$key] ?? ''; }
     public function __call($name, $args) { return ''; }
 }
 function check_purchase($condition, $message) { if (!$condition) throw new RuntimeException($message); echo "PASS: {$message}\n"; }
@@ -58,8 +59,30 @@ $view = new \Arya\Portal\PurchaseFulfillment();
 check_purchase($view->snapshot($order) === null, 'another customer cannot read purchase status');
 $GLOBALS['arya_current_user'] = (object) ['ID' => 7];
 $GLOBALS['test_order'] = $order;
-set_transient('arya_purchase_100', ['label' => 'ارسال‌شده', 'tracking_code' => '00123', 'history' => [['label' => 'ارسال‌شده', 'at' => '2026-09-15T12:00:00Z', 'comment' => '<script>alert(1)</script>', 'internal_comment' => 'PRIVATE']]]);
+$GLOBALS['arya_http_log'] = [];
+$order->meta['_arya_shipments'] = json_encode(['version' => 1, 'shipments' => [
+    ['number' => 'ATH-1', 'status' => 'shipped', 'label' => 'ارسال‌شده', 'color' => '#f6993f', 'method' => 'پست پیشتاز',
+        'tracking_code' => '00123', 'tracking_url' => 'https://tracking.example/?id=00123&x="y"', 'note' => '<script>alert(1)</script>',
+        'internal_note' => 'PRIVATE', 'items' => [['name' => 'کالا', 'quantity' => 2]],
+        'history' => [['status' => 'pending', 'label' => 'در انتظار', 'at' => '2026-09-15T12:00:00Z'], ['status' => 'shipped', 'label' => 'ارسال‌شده', 'at' => '2026-09-16T12:00:00Z', 'tracking_code' => '00123']]],
+    ['number' => 'ATH-2', 'status' => 'pending', 'label' => 'در انتظار', 'color' => 'red;background:url(x)', 'method' => 'پیک', 'items' => []],
+]], JSON_UNESCAPED_UNICODE);
 ob_start(); $view->render(100); $html = ob_get_clean();
-check_purchase(strpos($html, '&lt;script&gt;') !== false && strpos($html, '<script>') === false, 'customer comments are escaped');
+check_purchase(strpos($html, '&lt;script&gt;') !== false && strpos($html, '<script>') === false, 'customer notes are escaped');
 check_purchase(strpos($html, 'PRIVATE') === false, 'internal notes never render even if accidentally present');
 check_purchase(strpos($html, '00123') !== false, 'tracking retains leading zeroes');
+check_purchase(strpos($html, 'بستهٔ 2') !== false, 'every package of the order is shown');
+check_purchase(strpos($html, 'url(x)') === false, 'an unexpected color value is not echoed into the style attribute');
+check_purchase(empty($GLOBALS['arya_http_log']), 'order page makes no request to the CRM');
+ob_start(); $view->column($order); $column = ob_get_clean();
+check_purchase(strpos($column, 'ATH') === false && strpos($column, '00123') !== false, 'orders column lists the packages with tracking');
+
+$legacy = new PurchaseTestOrder();
+$legacy->meta['_arya_tracking_code'] = '0099';
+$GLOBALS['test_order'] = $legacy;
+ob_start(); $view->render(100); $html = ob_get_clean();
+check_purchase(strpos($html, '0099') !== false, 'orders from before the shipping module still show their tracking code');
+
+$noCrm = new PurchaseTestOrder();
+$noCrm->meta = [];
+check_purchase($view->snapshot($noCrm) === null, 'orders the CRM never registered show nothing');

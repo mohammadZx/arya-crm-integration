@@ -3,7 +3,7 @@
  * Plugin Name: Arya Portal Integration
  * Plugin URI: https://aryatehran.com
  * Description: افزونه یکپارچگی با پورتال آریا تهران برای همگام‌سازی محصولات، سفارشات و اطلاعات کاربران
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Arya Tehran Team
  * Author URI: https://aryatehran.com
  * Text Domain: arya-portal
@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('ARYA_PORTAL_VERSION', '1.0.0');
+define('ARYA_PORTAL_VERSION', '1.1.0');
 define('ARYA_PORTAL_PLUGIN_FILE', __FILE__);
 define('ARYA_PORTAL_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('ARYA_PORTAL_PLUGIN_URL', plugin_dir_url(__FILE__));
