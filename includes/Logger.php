@@ -86,6 +86,10 @@ class Logger {
     const USERINFO_UPDATE_FAILED    = 'USERINFO_UPDATE_FAILED';
     const USERINFO_UPDATE_REJECTED  = 'USERINFO_UPDATE_REJECTED';
 
+    /* عیب‌یاب کارآموز و «مشکل دارم» (arya-training TraineeHelp) */
+    const TRAINEE_HELP_FAILED = 'TRAINEE_HELP_FAILED';
+    const ABSENCE_SAVE_FAILED = 'ABSENCE_SAVE_FAILED';
+
     /* ---------------------------------------------------------------
      |  کدهای تالار گفتگو (Rocket.Chat)
      ---------------------------------------------------------------- */
@@ -142,6 +146,8 @@ class Logger {
         self::USERINFO_EMPTY_SECTION => 'بخشی از داده‌های فرم خالی برگشت',
         self::USERINFO_UPDATE_FAILED => 'ثبت اطلاعات کاربر در CRM شکست خورد',
         self::USERINFO_UPDATE_REJECTED => 'CRM اطلاعات ارسالی را رد کرد',
+        self::TRAINEE_HELP_FAILED => 'عیب‌یاب یا گزارش مشکل کارآموز پاسخ معتبری از CRM نگرفت',
+        self::ABSENCE_SAVE_FAILED => 'ثبت علت غیبت کارآموز پاسخ معتبری از CRM نگرفت',
         self::RC_REQUEST_FAILED   => 'درخواست به سرور تالار گفتگو نرسید (شبکه/تایم‌اوت)',
         self::RC_HTTP_STATUS      => 'سرور تالار گفتگو کد وضعیت خطا برگرداند',
         self::RC_CIRCUIT_OPEN     => 'ارتباط با تالار گفتگو به دلیل خطاهای پیاپی موقتاً قطع شد',

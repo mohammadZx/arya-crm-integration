@@ -718,6 +718,65 @@ class PersonData {
     }
 
     /**
+     * Troubleshooter of one registration for the trainee (topic: videos | survey):
+     * every check with its light, a sentence and, when the trainee can fix it, a button.
+     */
+    public function traineeDiagnose($regid, $topic = 'videos') {
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/register/" . (int) $regid . "/diagnose?topic=" . rawurlencode((string) $topic), [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /** How many things are left to do in each active course («دوره‌های من» chips). */
+    public function traineeDiagnoseSummary() {
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/registers/diagnose-summary", [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /** Every registration of the person (course, class code, cancelled?) for «which course?» before a troubleshooter. */
+    public function traineeRegisters() {
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/registers/choices", [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /** Certificate troubleshooter: from a course registration, or from a certificate request. */
+    public function traineeCertificate($regid = null, $serviceRegisterId = null) {
+        $path = $serviceRegisterId
+            ? "person/{$this->phone}/service/" . (int) $serviceRegisterId . "/diagnose"
+            : "person/{$this->phone}/register/" . (int) $regid . "/certificate";
+        $response = $this->ws_get($this->portal_path . $path, [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /** «مشکل دارم»: a follow-up note for the course director instead of a phone call. */
+    public function traineeReport(array $data) {
+        $response = $this->ws_post("{$this->portal_path}person/{$this->phone}/report", [
+            'headers' => $this->get_headers(),
+            'body' => array_filter([
+                'topic' => (string) ($data['topic'] ?? 'other'),
+                'text' => isset($data['text']) ? (string) $data['text'] : null,
+                'register_id' => !empty($data['register_id']) ? (int) $data['register_id'] : null,
+                'service_register_id' => !empty($data['service_register_id']) ? (int) $data['service_register_id'] : null,
+                'page' => isset($data['page']) ? (string) $data['page'] : null,
+                'device' => isset($data['device']) ? (string) $data['device'] : null,
+            ], fn ($value) => $value !== null && $value !== ''),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
      * Get person register by ID
      */
     public function getPersonRegisterById($regid) {
