@@ -765,6 +765,7 @@ class PersonData {
             'headers' => $this->get_headers(),
             'body' => array_filter([
                 'topic' => (string) ($data['topic'] ?? 'other'),
+                'priority' => isset($data['priority']) ? (string) $data['priority'] : null,
                 'text' => isset($data['text']) ? (string) $data['text'] : null,
                 'register_id' => !empty($data['register_id']) ? (int) $data['register_id'] : null,
                 'service_register_id' => !empty($data['service_register_id']) ? (int) $data['service_register_id'] : null,
