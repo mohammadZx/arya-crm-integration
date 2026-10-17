@@ -111,6 +111,66 @@ class REST_API {
             'callback' => [$this, 'sync_product'],
             'permission_callback' => [$this, 'check_access_from_portal']
         ]);
+
+        // وجود محصولات با شناسه (CRM محصولات اهدایی خدمت را با آن بررسی می‌کند؛ فقط خواندنی)
+        register_rest_route('portal', '/lookup', [
+            'methods' => 'GET',
+            'callback' => [$this, 'lookup_products'],
+            'permission_callback' => [$this, 'check_access_from_portal']
+        ]);
+
+        // فقط قیمت محصولِ خودِ یک خدمت (موجودی، مجازی بودن و ارسال دست نمی‌خورند)
+        register_rest_route('portal', '/service-price', [
+            'methods' => 'PUT',
+            'callback' => [$this, 'update_service_price'],
+            'permission_callback' => [$this, 'check_access_from_portal']
+        ]);
+    }
+
+    /**
+     * پاسخ ناموفق یکدست برای CRM: status=false، کد ماشینی و پیام قابل‌نمایش.
+     * CRM از روی code پیام را به زبان خودش ترجمه می‌کند و message را پشتیبان دارد.
+     */
+    private function fail($code, $message, $extra = []) {
+        return array_merge(['status' => false, 'code' => $code, 'message' => $message], $extra);
+    }
+
+    private function ok($message, $extra = []) {
+        return array_merge(['status' => true, 'code' => 'ok', 'message' => $message], $extra);
+    }
+
+    /** مادر یا تنوع دیگری از آن (به‌جز $except_id) course_id دارد؟ */
+    private function has_other_mapped($parent_id, $except_id) {
+        $ids = array_merge([(int) $parent_id], array_map('intval', get_children([
+            'post_parent' => $parent_id,
+            'post_type' => 'product_variation',
+            'post_status' => 'any',
+            'fields' => 'ids',
+        ])));
+
+        foreach ($ids as $id) {
+            // کد انبار می‌تواند حرف هم داشته باشد؛ فقط خالی/صفر یعنی وصل نیست
+            $mapped = trim((string) get_post_meta($id, 'course_id', true));
+            if ($id !== (int) $except_id && $mapped !== '' && $mapped !== '0') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** محصولِ دوره/خدمت در سایت: متای course_id + portal_category */
+    private function find_mapped_product($course_id, $category_id) {
+        // مثل قبل فقط محصول منتشرشده (پیش‌فرض get_posts)
+        $posts = get_posts([
+            'post_type' => 'product',
+            'meta_query' => [
+                ['key' => 'course_id', 'value' => $course_id, 'compare' => '='],
+                ['key' => 'portal_category', 'value' => $category_id, 'compare' => '='],
+            ]
+        ]);
+
+        return $posts[0] ?? null;
     }
     
     /**
@@ -302,14 +362,19 @@ class REST_API {
     public function sync_product($request) {
         $params = $request->get_params();
 
-        if (!$params['course_id'] || !$params['category_id']) {
-            return ['status' => false, 'message' => 'ورودی نامعتبر', 'request' => $params];
+        if (empty($params['course_id']) || empty($params['category_id'])) {
+            return $this->fail('invalid_request', 'شناسهٔ آیتم یا دستهٔ پورتال ارسال نشده است.');
         }
 
+        $mapped = 0;
         if (isset($params['sync_by']) && is_array($params['sync_by'])) {
             // Validate
             foreach ($params['sync_by'] as $sync_product) {
-                $product_id = $sync_product['id'];
+                $product_id = $sync_product['id'] ?? null;
+                if (!$product_id || !wc_get_product($product_id)) {
+                    $label = !empty($sync_product['name']) ? $sync_product['name'] . ' #' . $product_id : '#' . $product_id;
+                    return $this->fail('product_not_found', 'محصول ' . $label . ' در سایت پیدا نشد.', ['product_id' => $product_id]);
+                }
                 $product_course_id = get_post_meta($product_id, 'course_id', true);
 
                 $post_type = get_post_type($product_id);
@@ -327,8 +392,22 @@ class REST_API {
                     if (($product_course_id != $params['course_id'] && $category_id == $params['category_id']) ||
                         ($category_id != $params['category_id'])
                     ) {
-                        return ['status' => false, 'message' => $sync_product['name'] . ' دارای ورودی دیگری می باشد'];
+                        return $this->fail('mapping_conflict', ($sync_product['name'] ?? ('#' . $product_id)) . ' دارای ورودی دیگری می باشد', [
+                            'product_id' => $product_id,
+                            'mapped_to' => $product_course_id,
+                            'mapped_category' => $category_id,
+                        ]);
                     }
+                }
+
+                // دسته روی محصول مادر است: اگر خود مادر یا تنوع دیگری از آن هنوز با دستهٔ دیگری وصل است،
+                // عوض کردن دسته سفارش‌های آن‌ها را هم عوض می‌کند (مثلاً کالای انبار خدمت ثبت می‌شود)
+                if ($target_id && $category_id && $category_id != $params['category_id'] && $this->has_other_mapped($target_id, (int) $product_id)) {
+                    return $this->fail('mapping_conflict', 'محصول مادرِ ' . ($sync_product['name'] ?? ('#' . $product_id)) . ' به دستهٔ دیگری وصل است؛ تنوع‌های یک محصول نمی‌توانند در دو دسته (مثلاً کالا و خدمت) باشند.', [
+                        'product_id' => $product_id,
+                        'parent_id' => $target_id,
+                        'mapped_category' => $category_id,
+                    ]);
                 }
             }
 
@@ -353,10 +432,11 @@ class REST_API {
                 }
                 
                 update_post_meta($target_id, 'portal_category', $params['category_id']);
+                $mapped++;
             }
         }
 
-        return ['status' => true];
+        return $this->ok($mapped ? 'اتصال ' . $mapped . ' محصول در سایت ثبت شد.' : 'محصولی برای اتصال انتخاب نشده بود.', ['mapped' => $mapped]);
     }
     
     /**
@@ -365,8 +445,8 @@ class REST_API {
     public function add_headline($request) {
         $params = $request->get_params();
 
-        if (!$params['course_id'] || !$params['category_id']) {
-            return ['status' => false, 'message' => 'ورودی نامعتبر', 'request' => $params];
+        if (empty($params['course_id']) || empty($params['category_id'])) {
+            return $this->fail('invalid_request', 'شناسهٔ دوره یا دستهٔ پورتال ارسال نشده است.');
         }
 
         $sync = $this->sync_product($request);
@@ -392,7 +472,7 @@ class REST_API {
 
         $posts = get_posts($args);
         if (!count($posts)) {
-            return;
+            return $this->fail('course_product_not_found', 'محصول این دوره در سایت پیدا نشد؛ محصول سایت را در فرم دوره انتخاب و دوباره سینک کنید.');
         }
 
         $variation_helper = new VariationHelper();
@@ -455,7 +535,7 @@ class REST_API {
             rocket_clean_domain();
         }
 
-        return ['status' => true, 'message' => 'سرفصل ها با موفقیت برای این دوره ویرایش شد'];
+        return $this->ok('سرفصل ها با موفقیت برای این دوره ویرایش شد', ['products' => count($posts)]);
     }
     
     /**
@@ -464,8 +544,22 @@ class REST_API {
     public function add_order($request) {
         $params = $request->get_params();
         
-        if (!$params['product_ids'] || !$params['phone'] || !$params['name']) {
-            return;
+        if (empty($params['product_ids']) || empty($params['phone']) || empty($params['name'])) {
+            return $this->fail('invalid_request', 'شناسهٔ محصولات، شماره یا نام شخص ارسال نشده است.');
+        }
+
+        $products = [];
+        $missing = [];
+        foreach (explode(',', $params['product_ids']) as $pid) {
+            $pid = trim($pid);
+            if ($pid === '') {
+                continue;
+            }
+            $product = wc_get_product($pid);
+            $product ? $products[] = $product : $missing[] = $pid;
+        }
+        if (!$products) {
+            return $this->fail('product_not_found', 'هیچ‌کدام از محصولات (' . implode(', ', $missing) . ') در سایت پیدا نشد.', ['missing' => $missing]);
         }
         
         $user = get_user_by('login', $params['phone']);
@@ -488,12 +582,7 @@ class REST_API {
 
         $order = wc_create_order();
         
-        foreach (explode(',', $params['product_ids']) as $pid) {
-            $product = wc_get_product($pid);
-            if (!$product) {
-                continue;
-            }
-            
+        foreach ($products as $product) {
             $item_id = $order->add_product($product, 1);
 
             $item = $order->get_item($item_id);
@@ -512,9 +601,84 @@ class REST_API {
         
         wc_downloadable_product_permissions($order->ID, true);
         
-        return wp_send_json(['status' => true, 'message' => 'محصولات مرتبط به صورت اتوماتیک به پنل کاربر اضافه شد']);
+        return wp_send_json($this->ok('محصولات مرتبط به صورت اتوماتیک به پنل کاربر اضافه شد', [
+            'order_id' => $order->get_id(),
+            'missing' => $missing,
+        ]));
     }
     
+    /**
+     * وجود محصولات با شناسه (فقط خواندنی). ids = "1,2,3"
+     */
+    public function lookup_products($request) {
+        $ids = array_filter(array_map('trim', explode(',', (string) $request->get_param('ids'))), 'strlen');
+        $items = [];
+        $missing = [];
+
+        foreach (array_slice(array_unique($ids), 0, 200) as $id) {
+            $product = wc_get_product($id);
+            if (!$product) {
+                $missing[] = $id;
+                continue;
+            }
+            $items[] = [
+                'id' => $product->get_id(),
+                'name' => $product->get_name(),
+                'type' => $product->get_type(),
+                'status' => $product->get_status(),
+            ];
+        }
+
+        return $this->ok('', ['items' => $items, 'missing' => array_values($missing)]);
+    }
+
+    /**
+     * قیمت محصولِ خودِ یک خدمت (course_id = شناسهٔ خدمت، portal_category = دستهٔ خدمات).
+     * برخلاف PUT /product به موجودی، مجازی بودن یا ارسال دست نمی‌زند.
+     */
+    public function update_service_price($request) {
+        $params = $request->get_params();
+        if (empty($params['course_id']) || empty($params['category_id']) || !isset($params['price'])) {
+            return $this->fail('invalid_request', 'شناسهٔ خدمت، دسته یا قیمت ارسال نشده است.');
+        }
+
+        $posts = get_posts([
+            'post_type' => ['product', 'product_variation'],
+            'numberposts' => -1,
+            'meta_query' => [['key' => 'course_id', 'value' => $params['course_id'], 'compare' => '=']],
+        ]);
+
+        $updated = [];
+        foreach ($posts as $post) {
+            $category_owner = $post->post_type === 'product_variation' ? $post->post_parent : $post->ID;
+            if (get_post_meta($category_owner, 'portal_category', true) != $params['category_id']) {
+                continue;
+            }
+            $product = wc_get_product($post->ID);
+            if (!$product || $product->is_type('variable')) {
+                continue;
+            }
+
+            $price = intval($params['price']);
+            $sale = isset($params['sale_price']) && $params['sale_price'] !== '' && $params['sale_price'] !== null ? intval($params['sale_price']) : '';
+            $product->set_regular_price($price);
+            $product->set_sale_price($sale);
+            $product->set_price($sale !== '' ? $sale : $price);
+            $product->save();
+            $updated[] = $post->ID;
+        }
+
+        if (!$updated) {
+            return $this->fail('service_product_not_found', 'محصولی با این خدمت در سایت پیدا نشد؛ اول محصول خدمت را سینک کنید.');
+        }
+
+        if (function_exists('rocket_clean_domain')) {
+            rocket_clean_domain();
+        }
+
+        return $this->ok('قیمت خدمت روی سایت به‌روز شد.', ['updated' => $updated]);
+    }
+
     /**
      * Add product (empty for now)
      */
@@ -664,108 +828,49 @@ class REST_API {
      * Add class course
      */
     public function add_class_course($request) {
-        $params = $request->get_params();
-        
-        if (!$params['course_id'] || !$params['category_id']) {
-            return;
-        }
-
-        $args = [
-            'post_type' => 'product',
-            'meta_query' => [
-                [
-                    'key' => 'course_id',
-                    'value' => $params['course_id'],
-                    'compare' => '=',
-                ],
-                [
-                    'key' => 'portal_category',
-                    'value' => $params['category_id'],
-                    'compare' => '=',
-                ],
-            ]
-        ];
-        
-        $posts = get_posts($args);
-        $post = $posts[0] ?? null;
-        
-        if (!$post || !$params['begin_date'] || !$params['day'] || !$params['start_time'] || !$params['end_time'] || !$params['course_code']) {
-            return;
-        }
-        
-        if (strtotime($params['begin_date']) <= strtotime(date('Y-m-d'))) {
-            return;
-        }
-
-        $variation_helper = new VariationHelper();
-        $settings = Settings::instance();
-
-        // Delete variation inserted
-        $variations = get_posts([
-            'post_type' => 'product_variation',
-            'numberposts' => -1,
-            'post_parent' => $post->ID,
-            'meta_query' => [
-                [
-                    'key' => 'course_code',
-                    'value' => [$params['course_code'], $settings->get_private_class_code()],
-                    'compare' => 'IN',
-                ],
-            ]
-        ]);
-
-        foreach ($variations as $variation_post) {
-            wp_delete_post($variation_post->ID, true);
-        }
-
-        $postedInfo = $variation_helper->insert_product_variable($post, $params);
-
-        if (isset($postedInfo['variation_id'])) {
-            $variation_helper->reorder_product_variable($postedInfo['variation_id']);
-        }
-        
-        if (function_exists('rocket_clean_domain')) {
-            rocket_clean_domain();
-        }
-        
-        return $postedInfo;
+        return $this->upsert_class_course($request);
     }
-    
+
     /**
-     * Edit class course
+     * Edit class course (همان کار ثبت: تنوع قبلی همین کد کلاس پاک و دوباره ساخته می‌شود)
      */
     public function edit_class_course($request) {
+        return $this->upsert_class_course($request);
+    }
+
+    /**
+     * ثبت/به‌روزرسانی تنوع کلاس روی محصول دوره. هر حالت ناموفق علت خودش را برمی‌گرداند؛
+     * قبلاً پاسخ خالی بود و CRM نمی‌دانست کلاس روی سایت رفت یا نه.
+     */
+    private function upsert_class_course($request) {
         $params = $request->get_params();
-        
-        if (!$params['course_id'] || !$params['category_id']) {
-            return;
+
+        if (empty($params['course_id']) || empty($params['category_id'])) {
+            return $this->fail('invalid_request', 'شناسهٔ دوره یا دستهٔ پورتال ارسال نشده است.');
         }
 
-        $args = [
-            'post_type' => 'product',
-            'meta_query' => [
-                [
-                    'key' => 'course_id',
-                    'value' => $params['course_id'],
-                    'compare' => '=',
-                ],
-                [
-                    'key' => 'portal_category',
-                    'value' => $params['category_id'],
-                    'compare' => '=',
-                ],
-            ]
-        ];
-        
-        $posts = get_posts($args);
-        $post = $posts[0] ?? null;
-        
-        if (!$post || !$params['begin_date'] || !$params['day'] || !$params['start_time'] || !$params['end_time'] || !$params['course_code']) {
-            return ['status' => false, 'message' => 'invalid data'];
+        $post = $this->find_mapped_product($params['course_id'], $params['category_id']);
+        if (!$post) {
+            return $this->fail('course_product_not_found', 'محصول این دوره در سایت پیدا نشد؛ اول دوره را با محصول سایت سینک کنید.');
         }
-        
+
+        $missing = [];
+        foreach (['begin_date', 'day', 'start_time', 'end_time', 'course_code'] as $key) {
+            if (empty($params[$key])) {
+                $missing[] = $key;
+            }
+        }
+        if ($missing) {
+            return $this->fail('incomplete', 'اطلاعات کلاس کامل نیست: ' . implode(', ', $missing), ['missing' => $missing]);
+        }
+
         if (strtotime($params['begin_date']) <= strtotime(date('Y-m-d'))) {
-            return;
+            return $this->fail('past_start', 'تاریخ شروع کلاس گذشته است؛ کلاس شروع‌شده روی سایت عرضه نمی‌شود.');
+        }
+
+        $product = wc_get_product($post->ID);
+        if (!$product || !$product->is_type('variable')) {
+            return $this->fail('not_variable', 'محصول دوره در سایت از نوع «متغیر» نیست.', ['product_id' => $post->ID]);
         }
 
         $variation_helper = new VariationHelper();
@@ -790,23 +895,33 @@ class REST_API {
         }
 
         $postedInfo = $variation_helper->insert_product_variable($post, $params);
-        
-        if (isset($postedInfo['variation_id'])) {
-            $variation_helper->reorder_product_variable($postedInfo['variation_id']);
+
+        if (empty($postedInfo['variation_id'])) {
+            return $this->fail('variation_failed', 'ساخت تنوع کلاس روی سایت انجام نشد (نوع برگزاری حضوری/آنلاین را بررسی کنید).', ['product_id' => $post->ID]);
         }
+
+        $variation_helper->reorder_product_variable($postedInfo['variation_id']);
 
         if (function_exists('rocket_clean_domain')) {
             rocket_clean_domain();
         }
-        
-        return $postedInfo;
+
+        return $this->ok('کلاس روی سایت ثبت شد.', [
+            'product_id' => $post->ID,
+            'variation_id' => $postedInfo['variation_id'],
+            'term' => $postedInfo['term'] ?? null,
+        ]);
     }
-    
+
     /**
      * Delete class course
      */
     public function delete_class_course($request) {
         $params = $request->get_params();
+
+        if (empty($params['course_code'])) {
+            return $this->fail('invalid_request', 'کد کلاس ارسال نشده است.');
+        }
 
         // Delete variation inserted
         $variations = get_posts([
@@ -829,7 +944,10 @@ class REST_API {
             rocket_clean_domain();
         }
 
-        return ['status' => true];
+        return $this->ok(
+            count($variations) ? 'کلاس از سایت حذف شد.' : 'این کلاس روی سایت نبود.',
+            ['deleted' => count($variations)]
+        );
     }
     
     /**
