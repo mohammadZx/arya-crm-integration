@@ -648,6 +648,18 @@ class PersonData {
     }
     
     /**
+     * برنامهٔ اقساط یک خرید (دوره: courses، مدرک/خدمت: services) با مبلغ‌ها به واحد سایت.
+     */
+    public function getRegisterInstallments($regid, $type = 'courses') {
+        $type = $type === 'services' ? 'services' : 'courses';
+        $response = $this->ws_get("{$this->portal_path}person/{$this->phone}/installments/{$type}/" . intval($regid), [
+            'headers' => $this->get_headers(),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
      * Get register payments
      */
     public function getRegisterPyametns($regid) {
