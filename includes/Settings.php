@@ -95,6 +95,13 @@ class Settings {
             'sanitize_callback' => 'absint',
             'default' => 14
         ]);
+
+        // رمزِ مشترکِ هویتِ چتِ سایت (ChatIdentity)؛ همان که در CRM ← کانال‌ها ← درگاهِ راکت‌چت ساخته می‌شود
+        register_setting('arya_portal_settings', 'arya_portal_chat_identity_secret', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_text_field',
+            'default' => ''
+        ]);
         
         // Settings sections
         add_settings_section(
@@ -165,6 +172,14 @@ class Settings {
             'arya_portal_log_retention_days',
             'نگهداری لاگ (روز)',
             [$this, 'render_log_retention_field'],
+            'arya-portal-settings',
+            'arya_portal_main_section'
+        );
+
+        add_settings_field(
+            'arya_portal_chat_identity_secret',
+            'رمز هویت چت سایت',
+            [$this, 'render_chat_identity_secret_field'],
             'arya-portal-settings',
             'arya_portal_main_section'
         );
@@ -256,6 +271,19 @@ class Settings {
         echo '<p class="description">فایل‌های لاگ روزانه پس از این تعداد روز خودکار حذف می‌شوند.</p>';
     }
     
+    /**
+     * Render chat identity secret field
+     */
+    public function render_chat_identity_secret_field() {
+        if (defined('ARYA_PORTAL_CHAT_IDENTITY_SECRET') && ARYA_PORTAL_CHAT_IDENTITY_SECRET) {
+            echo '<p class="description">در wp-config.php با ثابت ARYA_PORTAL_CHAT_IDENTITY_SECRET تنظیم شده است.</p>';
+            return;
+        }
+        $value = get_option('arya_portal_chat_identity_secret', '');
+        echo '<input type="password" name="arya_portal_chat_identity_secret" value="' . esc_attr($value) . '" class="regular-text" autocomplete="new-password" dir="ltr">';
+        echo '<p class="description">رمزی که CRM در «هوش مصنوعی ← کانال‌ها ← درگاه راکت‌چت ← رمز هویت سایت» یک بار نشان می‌دهد. با آن، کاربرِ واردشده در چتِ سایت برای دستیار شناخته می‌شود؛ خالی = همه مهمان‌اند.</p>';
+    }
+
     /**
      * Render settings page
      */

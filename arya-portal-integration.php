@@ -117,6 +117,7 @@ final class Arya_Portal_Integration {
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Admin.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Installment.php';
         require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/Backorder.php';
+        require_once ARYA_PORTAL_PLUGIN_DIR . 'includes/ChatIdentity.php';
     }
     
     /**
@@ -152,6 +153,9 @@ final class Arya_Portal_Integration {
         
         // Initialize Redirect Helper
         Arya\Portal\RedirectHelper::instance();
+
+        // Signed identity of the logged-in user for the site chat (Rocket.Chat livechat ← CRM AI)
+        Arya\Portal\ChatIdentity::instance();
     }
     
     /**
