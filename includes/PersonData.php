@@ -852,19 +852,57 @@ class PersonData {
             $meta['transaction'] = $transaction;
         }
 
+        // بخش پرداخت‌شده از اعتبار مرکزی (رزرو CRM)؛ price را گیرنده با آن کل می‌کند
+        $credit = CreditOrder::fromOrder($order);
+        if ($credit) {
+            $meta['credit'] = $credit;
+        }
+
         return $meta;
+    }
+
+    /** price کل = آنچه درگاه گرفت + بخش اعتبار سفارش */
+    private function gross_price($price, array $meta) {
+        return isset($meta['credit']['amount']) ? (float) $price + (float) $meta['credit']['amount'] : $price;
+    }
+
+    /**
+     * اعتبار مرکزی CRM (/api/v1/site-credit/...). خروجی: [کد وضعیت HTTP، بدنهٔ JSON به‌صورت آرایه].
+     * کد ۰ یعنی پاسخی نرسید (CRM در دسترس نیست).
+     *
+     * @return array{0: int, 1: array}
+     */
+    public function credit($method, $path, array $body = [], $timeout = 20) {
+        $args = ['headers' => $this->get_headers(), 'timeout' => $timeout];
+        $url = $this->portal_path . 'site-credit/' . ltrim($path, '/');
+        if ($method === 'GET') {
+            if ($body) {
+                $url = add_query_arg($body, $url);
+            }
+            $response = $this->ws_get($url, $args);
+        } else {
+            $args['body'] = $body;
+            $response = $this->ws_post($url, $args);
+        }
+        if (is_wp_error($response)) {
+            return [0, []];
+        }
+        $decoded = json_decode(wp_remote_retrieve_body($response), true);
+
+        return [(int) wp_remote_retrieve_response_code($response), is_array($decoded) ? $decoded : []];
     }
 
     /**
      * Set payment remote (course installment / certificate service fee / …)
      */
     public function setPaymentRemote($regid, $price, $orderId, $extra_data) {
+        $orderMeta = $this->payment_meta_from_order($orderId);
         $body = array_merge([
             'register_id' => $regid,
-            'price' => $price,
+            'price' => $this->gross_price($price, $orderMeta),
             'order_id' => $orderId,
             'meta' => $extra_data,
-        ], $this->payment_meta_from_order($orderId));
+        ], $orderMeta);
 
         $response = $this->ws_post("{$this->portal_path}remote-pay-payment", [
             'body' => ($body),
@@ -1370,12 +1408,13 @@ class PersonData {
      * Set exam payment remote
      */
     public function setExamPaymentRemote($examId, $price, $orderId) {
+        $orderMeta = $this->payment_meta_from_order($orderId);
         $body = array_merge([
             'user_id' => $this->phone,
             'exam_id' => $examId,
-            'price' => $price,
+            'price' => $this->gross_price($price, $orderMeta),
             'order_id' => $orderId,
-        ], $this->payment_meta_from_order($orderId));
+        ], $orderMeta);
 
         $response = $this->ws_post("{$this->portal_path}remote-pay-exam", [
             'body' => ($body),

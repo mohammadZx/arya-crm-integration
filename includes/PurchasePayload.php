@@ -29,6 +29,10 @@ class PurchasePayload {
         $shippingTotals = array_fill_keys(array_keys($groups), 0.0);
         $taxTotals = array_map(function ($group) { return $group['tax']; }, $groups);
         foreach ($order->get_items('fee') as $id => $fee) {
+            // بخش اعتبار مرکزی نه تخفیف است نه هزینه؛ پایین‌تر بین دسته‌ها تقسیم می‌شود
+            if (CreditOrder::isCreditFee($fee)) {
+                continue;
+            }
             $shares = self::allocate((float) $fee->get_total(), $weights);
             $tax = self::allocate((float) $fee->get_total_tax(), $weights);
             foreach ($groups as $key => $group) {
@@ -50,6 +54,9 @@ class PurchasePayload {
                 if ($shares[$key] > 0 || count($groups) === 1) $fees[$key][] = self::fee('woo-shipping-'.$id, $shipping->get_name(), 'shipping', $shares[$key]);
             }
         }
+        // اعتبار سفارش به نسبت مبلغ هر دسته (CRM برای هر بسته همان سهم را از همان رزرو تسویه می‌کند)
+        $credit = CreditOrder::fromOrder($order);
+        $creditShares = $credit ? self::allocate($credit['amount'], $weights) : [];
         $result = [];
         foreach ($groups as $key => $group) {
             if ($key === '_unmanaged' || !$group['items']) continue;
@@ -82,6 +89,9 @@ class PurchasePayload {
                 $payload['price'] = $total - $shippingTotals[$key];
                 $payload['pay_price'] = $payload['price'];
                 $payload['discount_total'] = -$discounts[$key];
+                if ($credit) {
+                    $payload['credit'] = ['hold_id' => $credit['hold_id'], 'amount' => $creditShares[$key] ?? 0];
+                }
             }
             $result[] = $payload;
         }

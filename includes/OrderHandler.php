@@ -87,6 +87,28 @@ class OrderHandler {
     }
 
     /**
+     * سفارش فقط محصول شارژ کیف پول (اسلاگ wallet) و سایت در حالت اعتبار مرکزی.
+     *
+     * @param \WC_Order $order
+     */
+    private function is_central_wallet_topup($order) {
+        if (!class_exists('\\Arya\\Account\\Credit\\CentralCredit') || !\Arya\Account\Credit\CentralCredit::isCentral()) {
+            return false;
+        }
+        $items = $order->get_items();
+        if (!$items) {
+            return false;
+        }
+        foreach ($items as $item) {
+            if ((string) get_post_field('post_name', (int) $item->get_product_id()) !== 'wallet') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Resolve buyer phone/name from WP user or WooCommerce billing fields (guest checkout).
      *
      * @param \WC_Order $order
@@ -177,6 +199,12 @@ class OrderHandler {
             return;
         }
 
+        // شارژ کیف پول در حالت اعتبار مرکزی از صف arya-account به site-credit/topups می‌رود؛ ثبت دوباره
+        // به‌عنوان «خرید» همان پول را دو بار در CRM می‌آورد (CRM هم رد می‌کند).
+        if ($this->is_central_wallet_topup($order)) {
+            return;
+        }
+
         $buyer = $this->resolve_buyer_from_order($order);
         if (!$buyer) {
             $this->log_order_send_skipped(
@@ -238,14 +266,24 @@ class OrderHandler {
         }
 
         foreach ($order->get_fees() as $fee_id => $fee) {
+            // پرداخت از اعتبار مرکزی تخفیف نیست؛ جدا در credit می‌رود
+            if (CreditOrder::isCreditFee($fee)) {
+                continue;
+            }
             $order_fee_total += $fee->get_total();
         }
+        $credit = CreditOrder::fromOrder($order);
+        $creditAmount = $credit ? $credit['amount'] : 0;
 
         $sendData['coupons'] = $this->get_coupon_data($order);
         $sendData['phone'] = $buyer['phone'];
         $sendData['name'] = $buyer['name'];
-        $sendData['price'] = $order->get_total() - $order->get_shipping_total();
-        $sendData['pay_price'] = $order->get_total() - $order->get_shipping_total();
+        // مبلغ کل خرید = آنچه درگاه گرفت + آنچه از اعتبار رفت (CRM خودش دو بخش را جدا ثبت می‌کند)
+        $sendData['price'] = $order->get_total() - $order->get_shipping_total() + $creditAmount;
+        $sendData['pay_price'] = $order->get_total() - $order->get_shipping_total() + $creditAmount;
+        if ($credit) {
+            $sendData['credit'] = $credit;
+        }
         $sendData['shipping_price'] = $order->get_shipping_total();
         $sendData['discount_total'] = $order_fee_total;
         $sendData['order_id'] = $order_id;
