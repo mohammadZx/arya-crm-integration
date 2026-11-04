@@ -259,7 +259,9 @@ class OrderHandler {
                 'course_id' => $courseId,
                 'course_code' => $courseCode,
                 'quantity' => $item->get_quantity(),
-                'price' => $item->get_total()
+                'price' => $item->get_total(),
+                // قیمت ردیف پیش از کد تخفیف: CRM اختلاف را تخفیف واقعی همان ردیف ثبت می‌کند (۱۴۰۵/۰۸/۱۳)
+                'subtotal' => $item->get_subtotal(),
             ];
             
             $quantity = $item->get_quantity();

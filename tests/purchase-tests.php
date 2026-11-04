@@ -1,6 +1,7 @@
 <?php
 
 require __DIR__.'/wp-stubs.php';
+require __DIR__.'/../includes/CreditOrder.php';
 require __DIR__.'/../includes/PurchasePayload.php';
 require __DIR__.'/../includes/PurchaseFulfillment.php';
 
@@ -44,6 +45,7 @@ $payloads = \Arya\Portal\PurchasePayload::groups($order, $base);
 check_purchase(count($payloads) === 1, 'one category produces one purchase');
 check_purchase($payloads[0]['purchase_total'] === 1083.0, 'goods, tax, positive fees, discount and shipping agree');
 check_purchase($payloads[0]['purchase_discount'] === 50.0, 'positive fees are never invoice discounts');
+check_purchase($payloads[0]['discount_lines'] === [['name' => 'تخفیف معرف', 'amount' => 50.0]], 'each order discount keeps its name for the CRM');
 check_purchase($payloads[0]['shipping_price'] === 100.0, 'shipping is preserved exactly once');
 check_purchase($payloads[0]['shipping']['external_method'] === 'flat_rate:3', 'shipping method instance is carried to CRM');
 

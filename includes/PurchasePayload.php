@@ -26,6 +26,8 @@ class PurchasePayload {
         if (array_sum($shippingWeights) <= 0) $shippingWeights = $weights;
         $fees = array_fill_keys(array_keys($groups), []);
         $discounts = array_fill_keys(array_keys($groups), 0.0);
+        // تخفیف‌های سفارش با نامشان (کد معرف…): CRM هر کدام را جدا روی خرید نشان می‌دهد
+        $discountLines = array_fill_keys(array_keys($groups), []);
         $shippingTotals = array_fill_keys(array_keys($groups), 0.0);
         $taxTotals = array_map(function ($group) { return $group['tax']; }, $groups);
         foreach ($order->get_items('fee') as $id => $fee) {
@@ -37,7 +39,10 @@ class PurchasePayload {
             $tax = self::allocate((float) $fee->get_total_tax(), $weights);
             foreach ($groups as $key => $group) {
                 $taxTotals[$key] += $tax[$key];
-                if ($shares[$key] < 0) $discounts[$key] += abs($shares[$key]);
+                if ($shares[$key] < 0) {
+                    $discounts[$key] += abs($shares[$key]);
+                    $discountLines[$key][] = ['name' => $fee->get_name(), 'amount' => abs($shares[$key])];
+                }
                 else if ($shares[$key] > 0) $fees[$key][] = self::fee('woo-fee-'.$id, $fee->get_name(), 'custom', $shares[$key]);
             }
         }
@@ -73,6 +78,7 @@ class PurchasePayload {
             $payload['purchase_total'] = round($total, wc_get_price_decimals());
             $payload['purchase_pay_total'] = $payload['purchase_total'];
             $payload['purchase_discount'] = $discounts[$key];
+            $payload['discount_lines'] = $discountLines[$key];
             $payload['fees'] = $fees[$key];
             $payload['shipping_price'] = $shippingTotals[$key];
             $payload['shipping'] = [
