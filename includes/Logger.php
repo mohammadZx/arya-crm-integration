@@ -119,6 +119,15 @@ class Logger {
     /** بعد از همه‌ی تلاش‌ها سفارش به CRM نرسید؛ باید دستی ثبت شود. */
     const ORDER_SEND_FAILED = 'ORDER_SEND_FAILED';
 
+    /** رزرو دوره (پیش‌پرداخت) بدون مبلغ کل معتبر، یا علامت رزرو روی سفارشی با قیمت کامل. */
+    const ORDER_RESERVATION = 'ORDER_RESERVATION';
+
+    /** پرداخت الباقی/مدرک/آزمونِ پرداخت‌شده به CRM نرسید؛ هر ۵ دقیقه دوباره فرستاده می‌شود. */
+    const PAYMENT_SEND_RETRY = 'PAYMENT_SEND_RETRY';
+
+    /** پرداخت الباقی/مدرک/آزمون بعد از همهٔ تلاش‌ها به CRM نرسید یا CRM ردش کرد؛ باید دستی ثبت شود. */
+    const PAYMENT_SEND_FAILED = 'PAYMENT_SEND_FAILED';
+
     /** خودِ ارسال لاگ شکست خورد. هرگز فرستاده نمی‌شود؛ فقط محلی می‌ماند. */
     const LOG_SHIP_FAILED = 'LOG_SHIP_FAILED';
 
@@ -160,6 +169,9 @@ class Logger {
         self::ORDER_SEND_SKIPPED  => 'ارسال سفارش به CRM انجام نشد',
         self::ORDER_SEND_RETRY    => 'ارسال سفارش پرداخت‌شده به CRM شکست خورد؛ دوباره تلاش می‌شود',
         self::ORDER_SEND_FAILED   => 'سفارش پرداخت‌شده بعد از همه‌ی تلاش‌ها به CRM نرسید',
+        self::ORDER_RESERVATION   => 'مبلغ کل رزرو دوره قابل محاسبه نبود',
+        self::PAYMENT_SEND_RETRY  => 'پرداخت الباقی/مدرک/آزمون به CRM نرسید؛ دوباره تلاش می‌شود',
+        self::PAYMENT_SEND_FAILED => 'پرداخت الباقی/مدرک/آزمون در CRM ثبت نشد؛ دستی بررسی شود',
         self::LOG_SHIP_FAILED     => 'ارسال لاگ‌ها به CRM شکست خورد',
     ];
 

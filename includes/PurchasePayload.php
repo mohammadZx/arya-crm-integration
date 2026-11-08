@@ -92,8 +92,9 @@ class PurchasePayload {
             ];
             // Legacy course/service paths keep their existing fields and installment contract.
             if (count($groups) > 1) {
-                $payload['price'] = $total - $shippingTotals[$key];
-                $payload['pay_price'] = $payload['price'];
+                $payload['pay_price'] = $total - $shippingTotals[$key];
+                // رزرو دوره: مبلغ کل = پرداختی + باقی دوره (Reservation::rest؛ تک‌دسته را OrderHandler می‌سازد)
+                $payload['price'] = $payload['pay_price'] + array_sum(array_column($group['items'], 'reserve_rest'));
                 $payload['discount_total'] = -$discounts[$key];
                 if ($credit) {
                     $payload['credit'] = ['hold_id' => $credit['hold_id'], 'amount' => $creditShares[$key] ?? 0];

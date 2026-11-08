@@ -150,6 +150,9 @@ final class Arya_Portal_Integration {
         // Initialize Order Handler
         Arya\Portal\OrderHandler::instance();
         new Arya\Portal\PurchaseFulfillment();
+
+        // پرداخت الباقی/مدرک/آزمونی که به CRM نرسید، هر ۵ دقیقه دوباره فرستاده می‌شود
+        Arya\Portal\RemotePaymentRetry::instance();
         
         // Initialize Redirect Helper
         Arya\Portal\RedirectHelper::instance();

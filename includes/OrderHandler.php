@@ -254,7 +254,7 @@ class OrderHandler {
             $is_online = get_post_meta($varId, 'has_online', true) == 'yes' && 
                         (!get_post_meta($varId, 'has_presence', true) || get_post_meta($varId, 'has_presence', true) == 'no');
 
-            $sendData['items'][] = [
+            $line = [
                 'purchase_key' => 'woo-item-'.$itemId,
                 'course_id' => $courseId,
                 'course_code' => $courseCode,
@@ -263,6 +263,12 @@ class OrderHandler {
                 // قیمت ردیف پیش از کد تخفیف: CRM اختلاف را تخفیف واقعی همان ردیف ثبت می‌کند (۱۴۰۵/۰۸/۱۳)
                 'subtotal' => $item->get_subtotal(),
             ];
+            // رزرو دوره: ردیف فقط پیش‌پرداخت است؛ باقی دوره روی مبلغ کل خرید می‌نشیند (پایین‌تر و PurchasePayload)
+            $reserveRest = Reservation::rest($order, $item);
+            if ($reserveRest > 0) {
+                $line['reserve_rest'] = $reserveRest;
+            }
+            $sendData['items'][] = $line;
             
             $quantity = $item->get_quantity();
         }
@@ -348,16 +354,11 @@ class OrderHandler {
             $sendData['comments'] = $order_notes[0]->content;
         }
 
-        // Check for installment payment
-        foreach ($order->get_items() as $item_id => $item) {
-            $pay_as_installment = $item->get_meta('pay_as_installment', true);
-            if ($pay_as_installment == 'on') {
-                $getProductId = $item->get_product_id();
-                $installmentPrice = get_post_meta($getProductId, 'installment_price', true);
-                $minInstallmentPrice = get_post_meta($getProductId, 'min_price_to_installment', true);
-                $payPrice = $sendData['pay_price'];
-                $sendData['price'] = $installmentPrice - ($minInstallmentPrice - $payPrice);
-            }
+        // رزرو دوره (پیش‌پرداخت): مبلغ کل ثبت‌نام = پرداختی + باقی دوره؛ CRM باقی را بدهی/اقساط می‌کند.
+        // علامت رزرو خرید سریع روی خود سفارش است و قبلاً دیده نمی‌شد (مبلغ کل = پیش‌پرداخت، «تسویه»).
+        $reserveRest = array_sum(array_column($sendData['items'] ?? [], 'reserve_rest'));
+        if ($reserveRest > 0) {
+            $sendData['price'] = $sendData['pay_price'] + $reserveRest;
         }
 
         if ($get_info) {
@@ -636,10 +637,10 @@ class OrderHandler {
      * @param WC_Order $order
      */
     public function installment_order($item, $cart_item_key, $values, $order) {
-        if (isset($values['pay_as_installment']) && $values['pay_as_installment'] == 'on') {
+        if (isset($values['pay_as_installment']) && Reservation::flagged($values['pay_as_installment'])) {
             $item->add_meta_data(
                 'pay_as_installment',
-                $values['pay_as_installment'],
+                'on',
                 true
             );
         }

@@ -103,6 +103,19 @@ class Settings {
             'default' => ''
         ]);
         
+        // رزرو دوره (پیش‌پرداخت): تخفیف روی مبلغ پیش‌پرداخت مجاز است؟ پیش‌فرض همان رفتار خرید سریع (مجاز)
+        register_setting('arya_portal_settings', Reservation::OPTION_ALLOW_COUPON, [
+            'type' => 'boolean',
+            'sanitize_callback' => [$this, 'sanitize_checkbox'],
+            'default' => true
+        ]);
+
+        register_setting('arya_portal_settings', Reservation::OPTION_ALLOW_REFERRAL, [
+            'type' => 'boolean',
+            'sanitize_callback' => [$this, 'sanitize_checkbox'],
+            'default' => true
+        ]);
+
         // Settings sections
         add_settings_section(
             'arya_portal_main_section',
@@ -183,6 +196,45 @@ class Settings {
             'arya-portal-settings',
             'arya_portal_main_section'
         );
+
+        add_settings_section(
+            'arya_portal_reserve_section',
+            'رزرو دوره (پیش‌پرداخت)',
+            [$this, 'render_reserve_section_description'],
+            'arya-portal-settings'
+        );
+
+        add_settings_field(
+            Reservation::OPTION_ALLOW_COUPON,
+            'کد تخفیف در رزرو',
+            [$this, 'render_reserve_coupon_field'],
+            'arya-portal-settings',
+            'arya_portal_reserve_section'
+        );
+
+        add_settings_field(
+            Reservation::OPTION_ALLOW_REFERRAL,
+            'کد معرف در رزرو',
+            [$this, 'render_reserve_referral_field'],
+            'arya-portal-settings',
+            'arya_portal_reserve_section'
+        );
+    }
+
+    public function render_reserve_section_description() {
+        echo '<p>در رزرو، مشتری فقط «حداقل پیش‌پرداخت» دوره را می‌پردازد و مبلغ کل ثبت‌نام در CRM «قیمت فروش اقساطی» دوره است (اگر خالی باشد، قیمت عادی همان تاریخ). تخفیف فقط از مبلغ پیش‌پرداخت کم می‌شود و همان مبلغ روی ثبت‌نام CRM به‌عنوان تخفیف ثبت می‌شود.</p>';
+    }
+
+    public function render_reserve_coupon_field() {
+        $value = Reservation::allowsCoupon();
+        echo '<label><input type="checkbox" name="' . esc_attr(Reservation::OPTION_ALLOW_COUPON) . '" value="1" ' . checked($value, true, false) . '> مجاز</label>';
+        echo '<p class="description">خاموش: در رزرو (خرید سریع و سبد خرید) کد تخفیف ووکامرس اعمال نمی‌شود.</p>';
+    }
+
+    public function render_reserve_referral_field() {
+        $value = Reservation::allowsReferral();
+        echo '<label><input type="checkbox" name="' . esc_attr(Reservation::OPTION_ALLOW_REFERRAL) . '" value="1" ' . checked($value, true, false) . '> مجاز</label>';
+        echo '<p class="description">خاموش: در رزرو کد معرف نه تخفیف می‌دهد و نه پورسانت معرف در CRM ثبت می‌شود.</p>';
     }
     
     /**

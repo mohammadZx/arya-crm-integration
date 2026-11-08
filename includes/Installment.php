@@ -120,10 +120,13 @@ HTML;
             
             if ($installmentPrice) {
                 $cart_item['data']->set_price($installmentPrice);
-                foreach ($cart->applied_coupons as $coupon) {
-                    $cart->remove_coupon($coupon);
+                // تخفیف روی پیش‌پرداخت رزرو طبق تنظیمات (ووکامرس ← پورتال آریا ← رزرو دوره)؛ قبلاً همیشه حذف می‌شد
+                if (!Reservation::allowsCoupon()) {
+                    foreach ($cart->applied_coupons as $coupon) {
+                        $cart->remove_coupon($coupon);
+                    }
                 }
-                if (isset($_SESSION['REF_CODE'])) {
+                if (!Reservation::allowsReferral() && isset($_SESSION['REF_CODE'])) {
                     unset($_SESSION['REF_CODE']);
                 }
                 continue;
@@ -135,7 +138,8 @@ HTML;
      * Add cart item data
      */
     public function add_cart_item_data($cart_item_data, $product_id, $variation_id) {
-        $cart_item_data['pay_as_installment'] = isset($_REQUEST['pay_as_installment']) ? $_REQUEST['pay_as_installment'] : false;
+        // فرم دوره «1» و چک‌باکس «on» می‌فرستد؛ یک مقدار ذخیره می‌شود تا همه‌جا (سفارش، اعتبار) یکی دیده شود
+        $cart_item_data['pay_as_installment'] = isset($_REQUEST['pay_as_installment']) && Reservation::flagged(wp_unslash($_REQUEST['pay_as_installment'])) ? 'on' : false;
         return $cart_item_data;
     }
     
@@ -156,9 +160,10 @@ HTML;
      * Get installment price
      */
     public function get_installment_price($productId, $varId, $installmentPay = false) {
-        if ($installmentPay != 'on') return false;
-        $minPrice = get_post_meta($productId, 'min_price_to_installment', true);
-        if (!intval($minPrice)) return false;
+        if (!Reservation::flagged($installmentPay)) return false;
+        // پیش‌پرداخت همان تاریخ (متغیر)، وگرنه خود دوره — مثل خرید سریع
+        $minPrice = Reservation::deposit($productId, $varId != $productId ? $varId : 0);
+        if ($minPrice <= 0) return false;
         return $minPrice;
     }
 }
