@@ -119,6 +119,13 @@ class REST_API {
             'permission_callback' => [$this, 'check_access_from_portal']
         ]);
 
+        // وضعیت انتشار محصول‌ها: بایگانی دوره/محصول/خدمت در CRM (پیش‌نویس) و بازیابی‌اش (انتشار)
+        register_rest_route('portal', '/product-status', [
+            'methods' => 'PUT',
+            'callback' => [$this, 'update_product_status'],
+            'permission_callback' => [$this, 'check_access_from_portal']
+        ]);
+
         // فقط قیمت محصولِ خودِ یک خدمت (موجودی، مجازی بودن و ارسال دست نمی‌خورند)
         register_rest_route('portal', '/service-price', [
             'methods' => 'PUT',
@@ -630,6 +637,50 @@ class REST_API {
         }
 
         return $this->ok('', ['items' => $items, 'missing' => array_values($missing)]);
+    }
+
+    /**
+     * وضعیت انتشار محصول‌ها (CRM: بایگانی = draft، بازیابی = publish). ids = شناسه‌های محصول یا تنوع («1,2» یا آرایه).
+     * تنوع پیش‌نویس ندارد: draft برای تنوع یعنی private (غیرفعال در فروشگاه). وضعیت قبلی هر محصول برمی‌گردد.
+     */
+    public function update_product_status($request) {
+        $status = (string) $request->get_param('status');
+        if (!in_array($status, ['draft', 'publish'], true)) {
+            return $this->fail('invalid_status', 'وضعیت باید draft یا publish باشد.');
+        }
+
+        $ids = $request->get_param('ids');
+        if (!is_array($ids)) {
+            $ids = explode(',', (string) $ids);
+        }
+        $ids = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $ids)), 'strlen')));
+
+        $updated = [];
+        $missing = [];
+        foreach (array_slice($ids, 0, 500) as $id) {
+            $product = wc_get_product($id);
+            if (!$product) {
+                $missing[] = $id;
+                continue;
+            }
+            $previous = $product->get_status();
+            $target = $product->is_type('variation') ? ($status === 'draft' ? 'private' : 'publish') : $status;
+            if ($previous !== $target) {
+                $product->set_status($target);
+                $product->save();
+            }
+            $updated[] = ['id' => $product->get_id(), 'previous' => $previous, 'status' => $target];
+        }
+
+        if (!$updated) {
+            return $this->fail('product_not_found', 'هیچ‌کدام از محصول‌ها در سایت پیدا نشد.', ['missing' => $missing]);
+        }
+
+        if (function_exists('rocket_clean_domain')) {
+            rocket_clean_domain();
+        }
+
+        return $this->ok($status === 'draft' ? 'محصول‌ها پیش‌نویس شدند.' : 'محصول‌ها منتشر شدند.', ['updated' => $updated, 'missing' => $missing]);
     }
 
     /**
