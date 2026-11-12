@@ -126,6 +126,13 @@ class REST_API {
             'permission_callback' => [$this, 'check_access_from_portal']
         ]);
 
+        // نقد تأییدشدهٔ نظرسنجی CRM روی صفحهٔ دوره / کالا (SurveyReviewPublisher)
+        register_rest_route('portal', '/survey-review', [
+            'methods' => 'POST',
+            'callback' => [$this, 'survey_review'],
+            'permission_callback' => [$this, 'check_access_from_portal']
+        ]);
+
         // فقط قیمت محصولِ خودِ یک خدمت (موجودی، مجازی بودن و ارسال دست نمی‌خورند)
         register_rest_route('portal', '/service-price', [
             'methods' => 'PUT',
@@ -188,6 +195,11 @@ class REST_API {
         return in_array('administrator', $user->roles) || in_array('shop_manager', $user->roles);
     }
     
+    /** نقد نظرسنجی CRM → دیدگاه تأییدشدهٔ محصول با امتیاز ستاره‌ای. */
+    public function survey_review($request) {
+        return SurveyReviewPublisher::publish((array) $request->get_params());
+    }
+
     /**
      * Search product
      */

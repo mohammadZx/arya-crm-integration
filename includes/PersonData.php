@@ -1463,6 +1463,43 @@ class PersonData {
     }
     
     /**
+     * Surveys this person still has to answer (CRM survey core, site JSON API).
+     * $placements: site_account | site_course_page | site_dashboard_alert | site_video_popup
+     */
+    public function site_survey_pending(string $phone, array $placements = ['site_account'], $registerId = null) {
+        $response = $this->ws_post("{$this->portal_path}site-survey/pending", [
+            'headers' => $this->get_headers(),
+            'body' => array_filter([
+                'phone' => $phone,
+                'placements' => $placements,
+                'register_id' => $registerId,
+            ], fn ($value) => $value !== null),
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
+     * Store one answer sheet (CRM survey core). $data: definition_id, questionnaire_id,
+     * subject_type, subject_id, answers[question_id] — the phone always comes from the caller.
+     */
+    public function site_survey_submit(string $phone, array $data) {
+        $response = $this->ws_post("{$this->portal_path}site-survey/submit", [
+            'headers' => $this->get_headers(),
+            'body' => [
+                'phone' => $phone,
+                'definition_id' => (int) ($data['definition_id'] ?? 0),
+                'questionnaire_id' => (int) ($data['questionnaire_id'] ?? 0),
+                'subject_type' => (string) ($data['subject_type'] ?? ''),
+                'subject_id' => (int) ($data['subject_id'] ?? 0),
+                'answers' => (array) ($data['answers'] ?? []),
+            ],
+        ]);
+
+        return json_decode(wp_remote_retrieve_body($response));
+    }
+
+    /**
      * Send survey
      */
     public function send_survey($data) {

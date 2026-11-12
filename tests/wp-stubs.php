@@ -77,7 +77,7 @@ function current_time($format) { return $format === 'mysql' ? date('Y-m-d H:i:s'
 function wp_json_encode($data, $flags = 0) { return json_encode($data, $flags | JSON_UNESCAPED_UNICODE); }
 function wp_generate_uuid4() { return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)); }
 function sanitize_text_field($str) { return trim(strip_tags((string) $str)); }
-function wp_unslash($value) { return is_string($value) ? stripslashes($value) : $value; }
+function wp_unslash($value) { return is_array($value) ? array_map("wp_unslash", $value) : (is_string($value) ? stripslashes($value) : $value); } // recursive, like stripslashes_deep
 function wp_get_current_user() { return $GLOBALS['arya_current_user'] ?? null; }
 function get_current_user_id() { return isset($GLOBALS['arya_current_user']) ? $GLOBALS['arya_current_user']->ID : 0; }
 function is_admin() { return false; }
